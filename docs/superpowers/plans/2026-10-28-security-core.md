@@ -58,3 +58,8 @@ User authorized building and publication. New isolated repository; no existing c
 - Ruff checks/format, CLI policy validation, wheel/sdist build and dependency audit passed.
 - Removed unused vulnerable bootstrap setuptools and synchronized uv.lock; no known
   vulnerabilities in the tested environment. This is not an independent penetration test.
+
+- GitHub CI passed on both initial main/dev branches, Linux/macOS Python 3.11/3.13.
+- CodeQL requested explicit TLS minimum. Follow-up hardening pins TLS >=1.2 and
+  integration-tests trusted HTTPS plus hostname mismatch. Test exposed Python's
+  classification of ::1 as reserved; explicit loopback exception fixes localhost use.
