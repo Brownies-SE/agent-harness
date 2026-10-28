@@ -42,7 +42,7 @@ def check_url(policy, raw, *, inference=False):
         if parsed.username is not None or parsed.password is not None or parsed.fragment:
             raise ValueError
         host = parsed.hostname.lower()
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
         if not 1 <= port <= 65535 or "%" in host or host.endswith("."):
             raise ValueError
         if not inference and (host not in policy.network_allow or port not in policy.network_ports):
@@ -52,8 +52,13 @@ def check_url(policy, raw, *, inference=False):
             raise SecurityError("network_resolution_failed")
         for address in addresses:
             ip = ipaddress.ip_address(address)
-            if ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
-                # IPv6 loopback is not reserved in ipaddress, but mapped addresses are.
+            if (
+                ip.is_link_local
+                or ip.is_multicast
+                or ip.is_unspecified
+                or (ip.is_reserved and not ip.is_loopback)
+            ):
+                # IPv6 loopback is classified reserved on some supported Python versions.
                 raise SecurityError("network_address_denied")
             if policy.local_only and not is_local(address):
                 raise SecurityError("local_only_network_denied")
@@ -80,7 +85,9 @@ def transport(target, *, method="GET", body=None, limit=256 * 1024, timeout=15):
         sock.settimeout(timeout)
         sock.connect((target.address, target.port))
         if target.scheme == "https":
-            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=target.host)
+            context = ssl.create_default_context()
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            sock = context.wrap_socket(sock, server_hostname=target.host)
         connection.sock = sock
         connection.request(
             method,

@@ -10,7 +10,7 @@ from agent_harness.executor import Executor, SecurityError
 from agent_harness.filesystem import filesystem_tools
 from agent_harness.mcp import MCPAdapter, MCPPermission
 from agent_harness.model import LocalModel
-from agent_harness.network import check_url, transport
+from agent_harness.network import check_url, http_tool, transport
 from agent_harness.policy import Policy
 
 
@@ -41,6 +41,7 @@ def test_both_runners_deterministically_deny(tmp_path, runner, attempt):
     executor = Executor(policy)
     for tool in filesystem_tools(policy):
         executor.register(tool)
+    executor.register(http_tool(policy))
     model = ScriptedModel([attempt, attempt, {"final": "done"}])
     assert runner(model, executor).run("test") == "done"
     denied = [m for m in model.observations if m["role"] == "tool"]
@@ -335,3 +336,60 @@ def test_failed_mcp_discovery_registers_no_tools_and_closes_client():
     for name in ("ok", "broken"):
         with pytest.raises(SecurityError):
             executor.execute({"tool": "mcp.local." + name, "arguments": {}})
+
+
+def test_https_transport_checks_certificates_and_hostname(tmp_path, monkeypatch):
+    import shutil
+    import ssl
+    import subprocess
+    from dataclasses import replace
+
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    openssl = shutil.which("openssl")
+    assert openssl is not None, "HTTPS integration tests require openssl"
+    subprocess.run(  # noqa: S603 -- fixed arguments and test-owned paths
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost",
+        ],
+        check=True,
+        capture_output=True,
+        timeout=15,
+    )
+    service = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(cert, key)
+    service.socket = context.wrap_socket(service.socket, server_side=True)
+    thread = Thread(target=service.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("SSL_CERT_FILE", str(cert))
+    try:
+        target = check_url(
+            Policy(network_allow=("localhost",), network_ports=(service.server_port,)),
+            f"https://localhost:{service.server_port}/data",
+        )
+        # localhost can resolve to ::1; this test server intentionally listens on IPv4.
+        target = replace(target, address="127.0.0.1")
+        assert transport(target) == b"local data"
+        with pytest.raises(SecurityError, match="network_failed"):
+            transport(replace(target, host="wrong.example"))
+    finally:
+        service.shutdown()
+        service.server_close()
+        thread.join()

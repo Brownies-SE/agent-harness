@@ -283,3 +283,18 @@ def test_unsupported_costly_schema_keywords_rejected(extra):
     }
     with pytest.raises(ValueError):
         Executor(Policy()).register(Tool("unsafe_schema", schema, (), lambda **kw: None))
+
+
+def test_ipv6_loopback_is_an_allowed_local_destination(monkeypatch):
+    monkeypatch.setattr(
+        "socket.getaddrinfo", lambda *a, **kw: [(10, 1, 6, "", ("::1", 8080, 0, 0))]
+    )
+    target = check_url(
+        Policy(network_allow=("localhost",), network_ports=(8080,)), "http://localhost:8080"
+    )
+    assert target.address == "::1"
+
+
+def test_explicit_zero_port_is_denied():
+    with pytest.raises(SecurityError):
+        check_url(Policy(network_allow=("127.0.0.1",), network_ports=(80,)), "http://127.0.0.1:0")
