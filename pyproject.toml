@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=84.1.0,<85"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-harness"
+version = "0.1.0"
+description = "The model proposes. The harness decides."
+requires-python = ">=3.11"
+dependencies = ["jsonschema>=4.23,<5", "PyYAML>=6.0.2,<7"]
+
+[project.optional-dependencies]
+langgraph = ["langgraph>=1.0,<2"]
+dev = ["pytest>=8.3,<10", "ruff>=0.11,<1", "pip-audit>=2.9,<3"]
+
+[project.scripts]
+agent-harness = "agent_harness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "S"]
+ignore = ["S101"]

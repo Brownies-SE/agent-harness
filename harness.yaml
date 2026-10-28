@@ -1,0 +1,31 @@
+# Roots are relative to this config file. No tools can access the rest of your machine.
+security:
+  local_only: true
+  telemetry: false
+
+model:
+  provider: local
+  endpoint: http://127.0.0.1:11434
+  name: ""  # Set to a model already installed on YOUR inference server.
+
+permissions:
+  filesystem.read: allow
+  filesystem.write: ask
+  network: deny
+  subprocess: deny
+  process.read: deny
+  process.write: deny
+  docker.read: deny
+  docker.write: deny
+  git.read: deny
+  git.write: deny
+
+filesystem:
+  roots:
+    - ./project
+  sensitive_allow: []  # Exact paths only; still must lie under an approved root.
+
+network:
+  default: deny
+  allow: []
+  ports: []
