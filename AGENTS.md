@@ -12,4 +12,7 @@ complete suite including actual LangGraph, Ruff checks/format and dependency aud
 Document trust limits accurately; in-process permission checks are not an OS sandbox.
 No third-party code/network silence guarantees. Do not commit secrets, user files,
 prompts, tool results, virtual environments or personal paths. Work on feature branches;
-main/dev require PR review and CI. Do not bypass protections to ship routine changes.
+only Brownies-SE may update main/dev. PRs and all required CI checks are mandatory;
+a second person's approval is not required. When the user authorizes a merge, merge as
+the authenticated owner after checks pass. GitHub does not allow self-approval, and no
+approval review is needed for this solo workflow. Do not weaken protections to ship changes.
