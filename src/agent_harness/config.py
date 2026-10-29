@@ -6,6 +6,7 @@ from jsonschema import Draft202012Validator
 
 from .executor import json_copy
 from .policy import CAPABILITIES, Policy
+from .runtime import RunLimits
 
 
 def obj(properties):
@@ -15,6 +16,13 @@ def obj(properties):
 STRING_LIST = {"type": "array", "items": {"type": "string"}}
 CONFIG_SCHEMA = obj(
     {
+        "run": obj(
+            {
+                "max_steps": {"type": "integer", "minimum": 1, "maximum": 100},
+                "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 3600},
+                "max_output_tokens": {"type": "integer", "minimum": 1, "maximum": 16384},
+            }
+        ),
         "security": obj({"local_only": {"type": "boolean"}, "telemetry": {"type": "boolean"}}),
         "permissions": obj({c: {"enum": ["allow", "deny", "ask"]} for c in CAPABILITIES}),
         "network": obj(
@@ -62,6 +70,7 @@ class Config:
     endpoint: str
     model: str
     provider: str
+    limits: RunLimits = RunLimits()
 
 
 def load_config(path):
@@ -98,6 +107,7 @@ def load_config(path):
             model.get("endpoint", "http://127.0.0.1:11434"),
             model.get("name", ""),
             model.get("provider", "local"),
+            RunLimits(**data.get("run", {})),
         )
     except (OSError, yaml.YAMLError, RecursionError, TypeError) as exc:
         raise ValueError("configuration unavailable or invalid") from exc

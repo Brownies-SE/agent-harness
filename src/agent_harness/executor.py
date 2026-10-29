@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Callable, Mapping
@@ -11,6 +12,7 @@ from referencing import Registry
 
 from .errors import SecurityError
 from .policy import Policy
+from .runtime import RunStopped, check_run, current_run
 from .schema import validate_schema
 
 MAX_REQUEST_BYTES = 128 * 1024
@@ -51,15 +53,20 @@ class Executor:
         self._grants.clear()
 
     def event(self, name, tool, reason="", request_id=None):
+        data = {
+            "event": name,
+            "tool": tool,
+            "reason": reason,
+            "request_id": request_id or uuid4().hex,
+        }
+        control = current_run()
+        if control is not None:
+            if name == "security.tool_denied":
+                control.denied_tools += 1
+            control.record(name, tool=tool, reason=reason, request_id=data["request_id"])
+            data["run_id"] = control.id
         try:
-            self._audit(
-                {
-                    "event": name,
-                    "tool": tool,
-                    "reason": reason,
-                    "request_id": request_id or uuid4().hex,
-                }
-            )
+            self._audit(data)
         except Exception as exc:
             raise SecurityError("audit_unavailable") from exc
 
@@ -99,6 +106,34 @@ class Executor:
         return [{"name": t.name, "parameters": deepcopy(t.schema)} for t in self._tools.values()]
 
     def execute(self, request):
+        control = check_run()
+        started = time.monotonic()
+        name = request.get("tool") if isinstance(request, dict) else None
+        name = name if isinstance(name, str) and name in self._tools else "<unknown>"
+        if control is not None:
+            control.tool_calls += 1
+        status = "failed"
+        try:
+            result = self._execute(request)
+            check_run()
+            status = "completed"
+            return result
+        except RunStopped:
+            status = "stopped"
+            raise
+        except SecurityError:
+            status = "denied"
+            raise
+        finally:
+            if control is not None:
+                control.record(
+                    "tool.finished",
+                    tool=name,
+                    status=status,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                )
+
+    def _execute(self, request):
         request_id = uuid4().hex
         name = "<unknown>"
         try:
@@ -154,13 +189,16 @@ class Executor:
                         )
                     except Exception:
                         answer = "deny"
+                check_run()
                 if not isinstance(answer, str) or answer not in {"once", "run"}:
                     self.event("security.approval_denied", name, request_id=request_id)
                     raise SecurityError("approval_denied")
                 self.event("security.approval_granted", name, request_id=request_id)
                 if answer == "run":
                     self._grants.add(fingerprint)
+            check_run()
             self.event("security.tool_allowed", name, request_id=request_id)
+            check_run()
             try:
                 return json_copy(tool.handler(**args), MAX_RESULT_BYTES)
             except SecurityError:

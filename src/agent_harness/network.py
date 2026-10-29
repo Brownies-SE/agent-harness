@@ -1,12 +1,17 @@
+import errno
 import http.client
 import ipaddress
+import select
 import socket
 import ssl
+import threading
+import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from .errors import SecurityError
 from .executor import Tool
+from .runtime import check_run
 
 LOCAL_NETS = tuple(
     ipaddress.ip_network(n)
@@ -31,6 +36,7 @@ class Target:
 
 
 def check_url(policy, raw, *, inference=False):
+    check_run()
     try:
         if not isinstance(raw, str) or not raw or len(raw) > 8192:
             raise ValueError
@@ -62,6 +68,7 @@ def check_url(policy, raw, *, inference=False):
                 raise SecurityError("network_address_denied")
             if policy.local_only and not is_local(address):
                 raise SecurityError("local_only_network_denied")
+        check_run()
         return Target(
             parsed.scheme,
             host,
@@ -77,17 +84,53 @@ def check_url(policy, raw, *, inference=False):
 
 def transport(target, *, method="GET", body=None, limit=256 * 1024, timeout=15):
     """Connect to the checked IP once; no proxies, redirects or second DNS lookup."""
+    control = check_run()
+    done = threading.Event()
+    expired = threading.Event()
+    deadline = time.monotonic() + timeout
     connection = http.client.HTTPConnection(target.host, target.port, timeout=timeout)
     sock = None
+
+    def monitor():
+        while not done.wait(0.02):
+            if time.monotonic() >= deadline or (control and control.stop_reason()):
+                expired.set()
+                active = sock
+                if active is not None:
+                    try:
+                        active.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        continue
+                return
+
+    watcher = threading.Thread(target=monitor, daemon=True)
+    watcher.start()
     try:
         family = socket.AF_INET6 if ":" in target.address else socket.AF_INET
         sock = socket.socket(family, socket.SOCK_STREAM)
+        sock.setblocking(False)
+        error = sock.connect_ex((target.address, target.port))
+        pending = {errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR}
+        if error and error not in pending:
+            raise OSError(error, "connection failed")
+        while error:
+            check_run()
+            if expired.is_set() or time.monotonic() >= deadline:
+                raise SecurityError("network_timeout")
+            _, ready, failed = select.select([], [sock], [sock], 0.02)
+            if ready or failed:
+                error = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                if error:
+                    raise OSError(error, "connection failed")
+        check_run()
         sock.settimeout(timeout)
-        sock.connect((target.address, target.port))
         if target.scheme == "https":
             context = ssl.create_default_context()
             context.minimum_version = ssl.TLSVersion.TLSv1_2
-            sock = context.wrap_socket(sock, server_hostname=target.host)
+            sock = context.wrap_socket(
+                sock, server_hostname=target.host, do_handshake_on_connect=False
+            )
+            sock.do_handshake()
         connection.sock = sock
         connection.request(
             method,
@@ -101,13 +144,19 @@ def transport(target, *, method="GET", body=None, limit=256 * 1024, timeout=15):
         data = response.read(limit + 1)
         if len(data) > limit:
             raise SecurityError("response_too_large")
+        check_run()
+        if expired.is_set():
+            raise SecurityError("network_timeout")
         return data
     except (OSError, http.client.HTTPException) as exc:
-        raise SecurityError("network_failed") from exc
+        check_run()
+        raise SecurityError("network_timeout" if expired.is_set() else "network_failed") from exc
     finally:
+        done.set()
         connection.close()
         if sock:
             sock.close()
+        watcher.join(timeout=0.1)
 
 
 def http_tool(policy):

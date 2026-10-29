@@ -14,3 +14,6 @@ dist/
 coverage.xml
 .coverage
 security-audit.jsonl
+
+*.sqlite3
+*.sqlite3-*

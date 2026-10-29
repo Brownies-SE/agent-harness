@@ -393,3 +393,23 @@ def test_https_transport_checks_certificates_and_hostname(tmp_path, monkeypatch)
         service.shutdown()
         service.server_close()
         thread.join()
+
+
+def test_model_request_has_run_output_token_limit(server):
+    from agent_harness.runtime import RunLimits
+
+    url, _ = server
+    model = LocalModel(Policy(), endpoint=url, model="test")
+    assert (
+        NativeAgent(model, Executor(Policy()), limits=RunLimits(max_output_tokens=77)).run("hello")
+        == "local answer"
+    )
+    assert Handler.body["max_tokens"] == 77
+
+
+@pytest.mark.parametrize("runner", [NativeAgent, LangGraphAgent])
+def test_non_object_provider_json_is_a_safe_model_error(monkeypatch, runner):
+    monkeypatch.setattr("agent_harness.model.transport", lambda *a, **kw: b"[]")
+    model = LocalModel(Policy(), endpoint="http://127.0.0.1:11434", model="test")
+    with pytest.raises(SecurityError, match="invalid_model_response"):
+        runner(model, Executor(Policy())).run("test")
