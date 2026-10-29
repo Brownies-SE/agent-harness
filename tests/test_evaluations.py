@@ -51,16 +51,14 @@ def configuration():
     return Config(Policy(), "http://127.0.0.1:11434", "test", "local")
 
 
-def test_evaluations_score_real_tools_and_outcomes_for_both_runners(tmp_path):
+def test_evaluations_score_real_tools_and_outcomes_with_langgraph(tmp_path):
     history = RunHistory(tmp_path / "state")
-    result = evaluate(
-        configuration(), runner="both", repeats=2, history=history, model_factory=TaskModel
-    )
-    assert result["total"] == 20
-    assert result["passed"] == 20
+    result = evaluate(configuration(), repeats=2, history=history, model_factory=TaskModel)
+    assert result["total"] == 10
+    assert result["passed"] == 10
     assert result["pass_rate"] == 1
-    assert {r["runner"] for r in result["cases"]} == {"native", "langgraph"}
-    assert len(history.list_runs()) == 20
+    assert {r["runner"] for r in result["cases"]} == {"langgraph"}
+    assert len(history.list_runs()) == 10
     assert all(r["run_id"] for r in result["cases"])
     assert all(r["elapsed_ms"] >= 0 for r in result["cases"])
     assert "answer" not in json.dumps(result)
@@ -85,12 +83,10 @@ def test_eval_network_case_never_reaches_transport(monkeypatch):
     assert result["passed"] == 5
 
 
-@pytest.mark.parametrize(
-    "runner,repeats", [("unknown", 1), ("native", 0), ("native", 21), ("native", True)]
-)
-def test_invalid_evaluation_options_rejected(runner, repeats):
+@pytest.mark.parametrize("repeats", [0, 21, True])
+def test_invalid_evaluation_options_rejected(repeats):
     with pytest.raises(ValueError):
-        evaluate(configuration(), runner=runner, repeats=repeats, model_factory=TaskModel)
+        evaluate(configuration(), repeats=repeats, model_factory=TaskModel)
 
 
 @pytest.mark.parametrize("repeat_target", [False, True])

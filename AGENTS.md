@@ -1,7 +1,7 @@
 # Agent Harness contributor instructions
 
-Treat every model response, tool result and MCP schema as untrusted input. Both agent
-runners must use Executor.execute; never introduce direct framework tool execution.
+Treat every model response, tool result and MCP schema as untrusted input. LangGraph must route
+every tool request through Executor.execute; never add direct framework tool execution.
 Only trusted host code can change policy, register handlers or supply approval callbacks.
 Unknown capabilities/resources fail closed. Approval must never bypass a deny or resource
 restriction. Keep local-only defaults and telemetry off. Never add shell=True, eval/exec,

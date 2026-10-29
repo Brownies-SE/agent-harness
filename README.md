@@ -3,18 +3,18 @@
 **The model proposes. The harness decides.**
 
 A working Python security core for running untrusted local models with explicitly
-scoped tools. Native and LangGraph agents use the **same policy and executor**.
+scoped tools. LangGraph is the only agent backend. Every tool call uses the harness policy and executor.
 A tool request is a proposal, never a permission grant.
 
 ```text
-Native Agent ────┐
-                ├── Tool request → Validation → Policy → Approval → Executor
-LangGraph Agent ┘                                             ├── Native tool
-                                                              └── MCP tool
+Model → LangGraph → Tool request → Validation → Policy → Approval → Executor
+                                                               ├── Built-in tool
+                                                               └── MCP tool
 ```
 
 This initial release includes a CLI, an OpenAI-compatible local inference adapter,
-bounded text file tools, an explicitly gated HTTP GET tool, a transport-neutral MCP
+bounded text file/directory tools, a local clock, an explicitly gated HTTP GET tool,
+a transport-neutral MCP
 adapter, and adversarial tests. It does not ship shell, Git, Docker or process-control
 tools. Their capability names are reserved for explicitly reviewed future tools.
 
@@ -25,7 +25,7 @@ then install the locked dependencies. Installation downloads packages and is sep
 from running in local-only mode.
 
 ```bash
-uv sync --locked --extra dev --extra langgraph
+uv sync --locked --extra dev
 uv run --no-sync agent-harness validate --config harness.yaml
 ```
 
@@ -36,7 +36,6 @@ No model weights are downloaded or launched by this project.
 
 ```bash
 uv run --no-sync agent-harness run --prompt 'Read README.md and summarize it.'
-uv run --no-sync agent-harness run --agent langgraph --prompt 'Read README.md.'
 ```
 
 Use `--no-sync` after installation to avoid dependency synchronization during a run.
@@ -66,7 +65,7 @@ serialized messages and tool schemas, not Python objects or tool implementations
 A malicious inference engine or installed plugin is executable trusted code outside
 what model-output validation can contain.
 
-There is no automatic telemetry integration in the native runner. Explicitly enabling
+Telemetry is disabled by default. Explicitly enabling
 `security.telemetry` permits LangGraph's LangSmith tracing according to the host's
 LangSmith configuration; it can export user data. Keep it false for local data confinement.
 
@@ -115,7 +114,30 @@ A run approval is scoped to tool + canonical arguments + capabilities, resets be
 agent runs, and never bypasses deny rules, paths or network restrictions. One executor
 belongs to one sequential run at a time; do not share it across concurrent runs.
 
-## Registering a native tool
+## Built-in tools
+
+| Tool | Arguments | Permission / behavior |
+| --- | --- | --- |
+| `read_file` | `path` | `filesystem.read`; UTF-8 text inside approved roots, up to 128 KiB. |
+| `write_file` | `path`, `content` | `filesystem.write`; the example policy asks before writes. Parent directories must exist. |
+| `list_directory` | `path` (use `.` for the workspace root) | `filesystem.read`; immediate allowed file/folder names and types, no recursion. |
+| `get_current_time` | none (`{}`) | Local system clock; returns matching `utc` and `local` ISO8601 timestamps. Declares no privileged capabilities. |
+| `http_get` | `url` | Network capability plus host/port policy; denied in the example configuration. |
+
+Directory listing returns `{"entries": [{"name": "README.md", "type": "file"}],
+"truncated": false}`. Results are sorted, contain at most 200 entries, and examine at most
+1000 immediate children. `truncated: true` means the listing is incomplete; it is not a
+recursive file search or a paginated index. Sensitive names, symlinks, hardlinked files
+and special files are excluded unless an exact sensitive-path override applies (links
+and special files remain excluded). Directory opens use the same descriptor-based,
+no-follow traversal as file operations. Read permissions and approval requirements apply
+before listing executes. File tools still reject directory roots as file arguments.
+
+Tool schemas and handlers are used by LangGraph and the CLI/evaluation registry.
+Clock reads do not enable filesystem, network or subprocess access. Tool results, including
+filenames and timestamps, remain untrusted data rather than new instructions.
+
+## Registering a tool
 
 Only trusted application code registers handlers. No model-generated code is executed.
 
@@ -140,7 +162,8 @@ assert executor.execute({"tool": "double", "arguments": {"value": 4}}) == 8
 ```
 
 Filesystem and network tools must declare a required string resource argument mapped
-as `resources={"path": "path"}` or `resources={"url": "url"}`. Registering code is
+as `resources={"path": "path"}` (file), `resources={"path": "directory"}` (directory),
+or `resources={"url": "url"}`. Registering code is
 responsible for complete capability declarations and actually using checked resources.
 The built-in filesystem/HTTP tools enforce these checks at use time; an arbitrary
 extension cannot be made safe merely by declaring metadata. Schemas use a bounded subset of JSON Schema: basic types, closed objects, arrays,
@@ -207,7 +230,7 @@ are not currently emitted as tool audit events.
 
 ## Run limits and cancellation
 
-Both backends share the same host-owned run lifecycle. Configure defaults in YAML or
+LangGraph uses the host-owned run lifecycle. Configure defaults in YAML or
 override them per CLI run:
 
 ```yaml
@@ -270,10 +293,10 @@ store; there is no automatic retention pruning in this release.
 ## Real local-model evaluations
 
 ```bash
-uv run --no-sync agent-harness eval --config harness.local.yaml --agent both --repeat 2
+uv run --no-sync agent-harness eval --config harness.local.yaml --repeat 2
 ```
 
-The suite runs five tasks per repeat/backend: randomized value lookup, combining two
+The suite runs five tasks per repeat: randomized value lookup, combining two
 files, a narrowly approved report write, rejection of an external URL, and rejection
 of `.env`. It creates disposable synthetic workspaces and a fixture policy: reads
 allowed, only the exact report write approved, networking denied, telemetry off.
@@ -288,17 +311,14 @@ run IDs, call counts and timings, never generated fixture contents or model answ
 Exit status is nonzero if any task fails. CI tests the evaluator with controlled model
 responses; live Ollama evaluation is explicit and never downloads models automatically.
 
-The first live Qwen3 4B Instruct run passed 5/10 cases across both backends. It exposed
-report-writing, arithmetic and JSON-formatting failures while unauthorized actions stayed
-blocked. This is an initial reliability baseline, not proof of general task competence.
-The repeated 20-case run passed 11/20 (55%): report writes and `.env` response
-formatting failed, and one lookup answer mismatched. Structured-output recovery, context
-compaction and durable resumption remain future work.
+Run this against your configured local model to measure its task reliability. The suite
+reports failures honestly; a final answer alone does not count as task success.
+Context compaction and durable resumption are not implemented.
 
 ## Development
 
 ```bash
-uv sync --locked --extra dev --extra langgraph
+uv sync --locked --extra dev
 uv run --no-sync pytest -q
 uv run --no-sync ruff check .
 uv run --no-sync ruff format --check .
@@ -311,7 +331,6 @@ workflow permissions are read-only except the CodeQL security-results upload job
 `main` is the default release branch; `dev` is the integration branch. Use feature
 branches and pull requests. Only Brownies-SE may update main/dev; the owner can merge
 passing PRs without another reviewer. Force pushes and branch deletion remain blocked.
-See [the design](docs/superpowers/specs/2026-10-28-security-design.md),
-[implementation plan](docs/superpowers/plans/2026-10-28-security-core.md) and
+See [the security design](docs/security-design.md) and
 [security policy](SECURITY.md). This initial core has adversarial regression coverage;
 it has not received an independent penetration test or sandbox certification.

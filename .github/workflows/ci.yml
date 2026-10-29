@@ -27,7 +27,7 @@ jobs:
           version: '0.13.6'
           enable-cache: false
           python-version: ${{ matrix.python }}
-      - run: uv sync --locked --extra dev --extra langgraph
+      - run: uv sync --locked --extra dev
       - run: uv run --no-sync pytest -q
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
@@ -44,7 +44,7 @@ jobs:
           version: '0.13.6'
           enable-cache: false
           python-version: '3.11'
-      - run: uv sync --locked --extra dev --extra langgraph
+      - run: uv sync --locked --extra dev
       - run: uv run --no-sync pip-audit --skip-editable
   security:
     runs-on: ubuntu-latest
