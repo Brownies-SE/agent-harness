@@ -309,7 +309,9 @@ CI tests Linux/macOS and actual compiled LangGraph execution, checks formatting,
 locked dependencies and runs CodeQL. Action references are pinned to commit IDs and
 workflow permissions are read-only except the CodeQL security-results upload job.
 `main` is the default release branch; `dev` is the integration branch. Use feature
-branches and pull requests. See [the design](docs/superpowers/specs/2026-10-28-security-design.md),
+branches and pull requests. Only Brownies-SE may update main/dev; the owner can merge
+passing PRs without another reviewer. Force pushes and branch deletion remain blocked.
+See [the design](docs/superpowers/specs/2026-10-28-security-design.md),
 [implementation plan](docs/superpowers/plans/2026-10-28-security-core.md) and
 [security policy](SECURITY.md). This initial core has adversarial regression coverage;
 it has not received an independent penetration test or sandbox certification.
