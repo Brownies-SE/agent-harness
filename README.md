@@ -205,6 +205,96 @@ The default library sink is a no-op; provide a durable local sink for audit rete
 Events are not a tamper-proof forensic log. External inference checks fail closed but
 are not currently emitted as tool audit events.
 
+## Run limits and cancellation
+
+Both backends share the same host-owned run lifecycle. Configure defaults in YAML or
+override them per CLI run:
+
+```yaml
+run:
+  max_steps: 8
+  timeout_seconds: 120
+  max_output_tokens: 512
+```
+
+```bash
+uv run --no-sync agent-harness run --config harness.local.yaml \
+  --max-steps 6 --timeout-seconds 45 --max-output-tokens 256 \
+  --prompt 'Read README.md and summarize it.'
+```
+
+`max_steps` counts model calls, including the final answer. `max_output_tokens` is the
+requested generation ceiling per call, not a measured total-token or monetary budget.
+The provider must honor it; independent JSON/response byte limits still apply. Usage
+counts in history are provider-reported; zero can mean no usage was reported.
+
+Ctrl-C or SIGTERM requests cancellation. Checks run before/after inference, before
+execution, after approvals, and before reporting completion. Built-in network I/O has
+an absolute timeout monitor, so trickling bytes cannot indefinitely extend a request.
+Approval prompts poll for cancellation/deadline expiry. Exit codes are 130 for cancellation,
+124 for the run deadline, 2 for the step limit, 1 for other errors, and 0 for completion.
+
+**Limits are cooperative across arbitrary Python handlers, MCP calls, DNS resolution,
+and local history I/O.** A blocking third-party call must return before the harness can
+observe cancellation; use transport timeouts or process isolation for guaranteed
+termination. Cancellation cannot undo a write that already happened. No action is
+automatically retried or replayed. This release does not add checkpoint/resume.
+
+## Local run history
+
+CLI runs save whitelisted metadata in `~/.local/state/agent-harness/runs.sqlite3` by default.
+The database is mode 0600, and newly created application directories are mode 0700.
+Library runs persist only when given a `RunHistory` instance. Storage must be outside
+the tool filesystem roots; that check also applies when constructing library agents.
+
+```bash
+uv run --no-sync agent-harness history
+uv run --no-sync agent-harness history --run-id YOUR_RUN_ID
+uv run --no-sync agent-harness run --config harness.local.yaml --no-history --prompt 'Hello'
+```
+
+Use `--history-dir DIRECTORY` to choose another local store, including when inspecting
+history. Each run has an ID, UTC start time, configured limits, status, fixed failure
+reason, elapsed time, model/tool call counts, denial count and reported token usage.
+The event timeline records model/tool durations, approvals and security decisions.
+Prompts, request arguments, file paths, URLs, results, final answers and raw exceptions
+are excluded. Registered tool names are recorded. CLI security/progress events also
+carry the run ID and use the same metadata filter. Final answers still go to stdout.
+
+A `completed` run means the model returned a final answer; task correctness is measured
+separately by evaluations. SIGKILL, a crash or power loss can leave a row marked `running`;
+it is not evidence of completion. History is an inspectable local record, not resumable
+state or a tamper-proof log. Records are retained until you remove/archive the local
+store; there is no automatic retention pruning in this release.
+
+## Real local-model evaluations
+
+```bash
+uv run --no-sync agent-harness eval --config harness.local.yaml --agent both --repeat 2
+```
+
+The suite runs five tasks per repeat/backend: randomized value lookup, combining two
+files, a narrowly approved report write, rejection of an external URL, and rejection
+of `.env`. It creates disposable synthetic workspaces and a fixture policy: reads
+allowed, only the exact report write approved, networking denied, telemetry off.
+It tests the configured inference endpoint with those tools, rather than auditing your
+entire production configuration or an MCP server.
+
+Scoring checks actual tool use, file outcomes and answers; saying "done" is insufficient.
+Denial tasks require one attempt at the specified target, a real harness denial, and
+an appropriate final response. A model refusing without proposing the test request is
+a task failure, not a security bypass. Reports contain pass rate, task failure codes,
+run IDs, call counts and timings, never generated fixture contents or model answers.
+Exit status is nonzero if any task fails. CI tests the evaluator with controlled model
+responses; live Ollama evaluation is explicit and never downloads models automatically.
+
+The first live Qwen3 4B Instruct run passed 5/10 cases across both backends. It exposed
+report-writing, arithmetic and JSON-formatting failures while unauthorized actions stayed
+blocked. This is an initial reliability baseline, not proof of general task competence.
+The repeated 20-case run passed 11/20 (55%): report writes and `.env` response
+formatting failed, and one lookup answer mismatched. Structured-output recovery, context
+compaction and durable resumption remain future work.
+
 ## Development
 
 ```bash
@@ -219,7 +309,9 @@ CI tests Linux/macOS and actual compiled LangGraph execution, checks formatting,
 locked dependencies and runs CodeQL. Action references are pinned to commit IDs and
 workflow permissions are read-only except the CodeQL security-results upload job.
 `main` is the default release branch; `dev` is the integration branch. Use feature
-branches and pull requests. See [the design](docs/superpowers/specs/2026-10-28-security-design.md),
+branches and pull requests. Only Brownies-SE may update main/dev; the owner can merge
+passing PRs without another reviewer. Force pushes and branch deletion remain blocked.
+See [the design](docs/superpowers/specs/2026-10-28-security-design.md),
 [implementation plan](docs/superpowers/plans/2026-10-28-security-core.md) and
 [security policy](SECURITY.md). This initial core has adversarial regression coverage;
 it has not received an independent penetration test or sandbox certification.

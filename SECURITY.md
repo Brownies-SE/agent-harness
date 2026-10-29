@@ -17,8 +17,11 @@ Local-only defaults constrain intentional harness traffic; they cannot guarantee
 third-party code never makes requests. See README for the four network boundaries.
 
 ## Repository controls
-Both main and dev should require PRs, passing CI, resolved review conversations and an
-independent review; reject force pushes/deletion and apply rules to admins. GitHub admins
-can still change repository settings. Workflows use minimal permissions, pinned actions,
+Both main and dev require PRs, passing CI and resolved review conversations. An active
+ruleset permits branch creation/updates/deletion only for the owner account Brownies-SE;
+there are no integration or role-wide exceptions. Separate branch protections reject force
+pushes/deletion, including for the owner. No second-person approval is required for this
+personal project. Agents authenticated with the owner's credentials act as the owner.
+The owner can still change repository settings. Workflows use minimal permissions, pinned actions,
 locked packages and no pull_request_target execution. Never put credentials in examples,
 workflow files or committed model transcripts. Feature work belongs on separate branches.
