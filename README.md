@@ -54,7 +54,10 @@ For a running conversation, start:
 .venv/bin/agent-harness chat --config harness.local.yaml
 ```
 
-Type at `You>`; replies appear at `AI>`. Tools and write approvals work during the chat.
+Type at `You >`; replies appear in a separate, wrapped `Assistant` block. The header
+shows your configured model. Write approvals show a file and content preview rather than
+raw JSON; choose `v` to view the full content, `y` once, `a` for the same request this
+turn, or `n` to deny. Routine context trimming happens quietly.
 Use `/clear` to forget conversation context and `/exit` (or Ctrl-D) to leave. Ctrl-C
 stops a reply in progress; at the input prompt it exits. Running without a command also
 starts chat. The `run --prompt` command remains available for one-off tasks.

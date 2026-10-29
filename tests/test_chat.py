@@ -54,8 +54,8 @@ def test_chat_remembers_user_and_assistant_between_turns(tmp_path, monkeypatch, 
     assert second[1]["content"] == "My name is Sam."
     assert json.loads(second[2]["content"]) == {"final": "Hello, Sam."}
     output = capsys.readouterr()
-    assert "AI> Hello, Sam." in output.out
-    assert "AI> Your name is Sam." in output.out
+    assert "Assistant\n  Hello, Sam." in output.out
+    assert "Assistant\n  Your name is Sam." in output.out
     assert "security.tool_" not in output.err
     assert len(RunHistory(tmp_path / "state").list_runs()) == 2
     assert b"My name is Sam" not in (tmp_path / "state/runs.sqlite3").read_bytes()
@@ -85,12 +85,13 @@ def test_cancelled_turn_keeps_chat_open_without_reusing_context(tmp_path, monkey
     }
 
 
-def test_chat_limits_in_memory_history(tmp_path, monkeypatch):
+def test_chat_limits_in_memory_history(tmp_path, monkeypatch, capsys):
     model = ChatModel(["ok"] * 12)
     assert start(tmp_path, monkeypatch, model, [*[str(i) for i in range(12)], "/exit"]) == 0
     assert len(model.messages) == 12
     assert max(len(messages) for messages in model.messages) <= 18
     assert len(model.messages[-1]) > 2
+    assert "trimmed" not in capsys.readouterr().out
 
 
 def test_chat_escapes_terminal_control_characters(tmp_path, monkeypatch, capsys):

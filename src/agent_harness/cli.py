@@ -14,24 +14,30 @@ from .executor import Executor
 from .history import RunHistory, safe_event
 from .model import LocalModel
 from .runtime import RunStopped, check_run
+from .terminal_ui import print_approval, print_block, print_reply, terminal_text
 from .tools import builtin_tools
 
 
 def terminal_approval(details):
-    # JSON encoding escapes terminal controls in model-provided values.
-    print(json.dumps(details, ensure_ascii=True), file=sys.stderr)
+    print_approval(details)
     if not sys.stdin.isatty():
         return "deny"
-    print(
-        "Allow? [y] once / [a] exact request for this run / [n] deny: ",
-        end="",
-        file=sys.stderr,
-        flush=True,
-    )
+    content = details["arguments"].get("content")
     while True:
-        check_run()
-        if select.select([sys.stdin], [], [], 0.1)[0]:
-            return {"y": "once", "a": "run"}.get(sys.stdin.readline().strip().lower(), "deny")
+        print("\n  [y] once   [a] same request this turn   [n] deny", file=sys.stderr)
+        if isinstance(content, str):
+            print("  [v] full content", file=sys.stderr)
+        print("  Allow: ", end="", file=sys.stderr, flush=True)
+        while True:
+            check_run()
+            if select.select([sys.stdin], [], [], 0.1)[0]:
+                answer = sys.stdin.readline().strip().lower()
+                break
+        if answer == "v" and isinstance(content, str):
+            print("\n  Full content", file=sys.stderr)
+            print_block(content, stream=sys.stderr, indent="    ")
+            continue
+        return {"y": "once", "a": "run"}.get(answer, "deny")
 
 
 @contextmanager
@@ -69,21 +75,14 @@ def build_agent(config, limits, history, *, on_event=None):
     return LangGraphAgent(model, executor, limits=limits, history=history, on_event=on_event)
 
 
-def terminal_text(text):
-    return "".join(
-        character
-        if character.isprintable() or character in "\n\t"
-        else character.encode("unicode_escape").decode("ascii")
-        for character in text
-    )
-
-
-def chat_loop(agent):
+def chat_loop(agent, *, model_name="local model"):
     messages = []
-    print("Chat ready. Type /clear to reset the conversation or /exit to quit.")
+    print("\nAgent Harness")
+    print("Model: " + terminal_text(model_name, multiline=False))
+    print("/clear reset conversation  /exit quit\n")
     while True:
         try:
-            prompt = input("You> ")
+            prompt = input("You > ")
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
@@ -92,7 +91,7 @@ def chat_loop(agent):
             return 0
         if command == "/clear":
             messages.clear()
-            print("Conversation cleared.")
+            print("\nConversation cleared.\n")
             continue
         if not prompt.strip():
             continue
@@ -105,19 +104,15 @@ def chat_loop(agent):
                 if signal.SIGTERM in received:
                     return 143
                 continue
-        print("AI> " + terminal_text(answer))
+        print_reply(answer)
         messages.extend(
             [
                 {"role": "user", "content": prompt},
                 {"role": "assistant", "content": json.dumps({"final": answer})},
             ]
         )
-        trimmed = False
         while messages and (len(messages) > 16 or len(json.dumps(messages)) > 8000):
             del messages[:2]
-            trimmed = True
-        if trimmed:
-            print("Chat memory was trimmed to keep the conversation bounded.")
 
 
 def main():
@@ -164,7 +159,7 @@ def main():
         if args.command == "chat":
             if args.prompt is not None:
                 parser.error("chat reads messages interactively; use run for --prompt")
-            return chat_loop(build_agent(config, limits, history))
+            return chat_loop(build_agent(config, limits, history), model_name=config.model)
         cancel = threading.Event()
         with cancellation_signals(cancel):
             if args.command == "eval":
