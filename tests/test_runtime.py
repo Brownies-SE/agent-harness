@@ -136,7 +136,8 @@ def test_network_trickle_cannot_extend_deadline_or_cancellation(cancelled):
         f"http://127.0.0.1:{service.server_port}/",
     )
     timer = threading.Timer(0.1, cancel.set)
-    control = RunControl(RunLimits(timeout_seconds=0.12), cancel=cancel)
+    # Test cancellation separately from the short deadline to avoid a scheduler race.
+    control = RunControl(RunLimits(timeout_seconds=2 if cancelled else 0.12), cancel=cancel)
     started = time.monotonic()
     try:
         if cancelled:
