@@ -119,16 +119,14 @@ class RunHistory:
         if not isinstance(run_id, str) or not re.fullmatch(r"[a-f0-9]{32}", run_id):
             raise ValueError("invalid run ID")
 
-    def begin(self, run_id, runner, limits):
+    def begin(self, run_id, limits):
         self.check_id(run_id)
-        if runner not in {"native", "langgraph"}:
-            raise ValueError("invalid runner")
         RunLimits(**limits)
         with self.connection() as connection:
             connection.execute(
                 "INSERT INTO runs(run_id, runner, started_at, status, limits_json) "
                 "VALUES (?, ?, ?, 'running', ?)",
-                (run_id, runner, datetime.now(timezone.utc).isoformat(), json.dumps(limits)),
+                (run_id, "langgraph", datetime.now(timezone.utc).isoformat(), json.dumps(limits)),
             )
 
     def append(self, run_id, event):

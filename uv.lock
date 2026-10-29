@@ -12,6 +12,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },
+    { name = "langgraph" },
     { name = "pyyaml" },
 ]
 
@@ -21,20 +22,17 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
-langgraph = [
-    { name = "langgraph" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "jsonschema", specifier = ">=4.23,<5" },
-    { name = "langgraph", marker = "extra == 'langgraph'", specifier = ">=1.0,<2" },
+    { name = "langgraph", specifier = ">=1.0,<2" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.9,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<10" },
     { name = "pyyaml", specifier = ">=6.0.2,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11,<1" },
 ]
-provides-extras = ["langgraph", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "annotated-types"

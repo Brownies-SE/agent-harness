@@ -79,12 +79,12 @@ class Executor:
         validate_schema(schema)
         resources = dict(tool.resources)
         for key, kind in resources.items():
-            if kind not in {"path", "url"} or key not in schema.get("required", []):
+            if kind not in {"path", "directory", "url"} or key not in schema.get("required", []):
                 raise ValueError("resource must be a required argument")
             if schema.get("properties", {}).get(key, {}).get("type") != "string":
                 raise ValueError("resource must have string schema")
         if any(c.startswith("filesystem.") for c in tool.capabilities):
-            if "path" not in resources.values():
+            if not {"path", "directory"}.intersection(resources.values()):
                 raise ValueError("filesystem tools require a path mapping")
         if "network" in tool.capabilities and "url" not in resources.values():
             raise ValueError("network tools require a URL mapping")
@@ -156,14 +156,16 @@ class Executor:
 
             for key, kind in tool.resources.items():
                 try:
-                    if kind == "path":
-                        _, canonical = check_path(self.policy, args[key])
+                    if kind in {"path", "directory"}:
+                        _, canonical = check_path(
+                            self.policy, args[key], allow_root=kind == "directory"
+                        )
                         args[key] = str(canonical)
                     else:
                         check_url(self.policy, args[key])
                 except SecurityError:
                     self.event(
-                        "security.path_blocked" if kind == "path" else "security.network_blocked",
+                        "security.network_blocked" if kind == "url" else "security.path_blocked",
                         name,
                         "resource_denied",
                         request_id,

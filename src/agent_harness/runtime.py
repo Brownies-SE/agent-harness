@@ -1,4 +1,4 @@
-"""Host-owned run lifecycle shared by both agent implementations."""
+"""Host-owned run lifecycle for the LangGraph agent."""
 
 import math
 import threading
@@ -126,11 +126,11 @@ class RunControl:
             )
 
     @contextmanager
-    def activate(self, runner):
+    def activate(self):
         self.started = time.monotonic()
         self.deadline = self.started + self.limits.timeout_seconds
         if self.history is not None:
-            self.history.begin(self.id, runner, asdict(self.limits))
+            self.history.begin(self.id, asdict(self.limits))
         token = _ACTIVE.set(self)
         self.status = "running"
         try:
