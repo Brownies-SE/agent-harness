@@ -63,6 +63,7 @@ class LocalModel:
                     "messages": wire_messages,
                     "stream": False,
                     "temperature": 0,
+                    "response_format": {"type": "json_object"},
                     "max_tokens": control.limits.max_output_tokens
                     if control
                     else RunLimits().max_output_tokens,

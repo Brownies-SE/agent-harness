@@ -48,6 +48,7 @@ def test_cli_run_then_history_without_model_or_config(tmp_path, monkeypatch, cap
     assert cli.main() == 0
     run = json.loads(capsys.readouterr().out)[0]
     assert run["status"] == "completed"
+    assert run["runner"] == "langgraph"
     assert run["limits"]["max_steps"] == 2
     assert run["limits"]["max_output_tokens"] == 77
     monkeypatch.setattr(
