@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .errors import SecurityError
 from .executor import Tool
+from .runtime import check_run
 
 SENSITIVE_PARTS = {
     ".ssh",
@@ -46,7 +47,7 @@ SENSITIVE_FILES = (
 MAX_FILE_BYTES = 128 * 1024
 
 
-def check_path(policy, raw):
+def check_path(policy, raw, *, allow_root=False):
     if not isinstance(raw, str) or not raw or "\x00" in raw or "\\" in raw:
         raise SecurityError("invalid_path")
     path = Path(raw)
@@ -61,7 +62,7 @@ def check_path(policy, raw):
             relative = path.relative_to(root)
         except ValueError:
             continue
-        if not relative.parts:
+        if not relative.parts and not allow_root:
             raise SecurityError("file_required")
         sensitive = any(part.lower() in SENSITIVE_PARTS for part in path.parts)
         sensitive |= any(
@@ -80,17 +81,26 @@ def check_path(policy, raw):
     raise SecurityError("path_outside_roots")
 
 
+def _directory_fd(root, parts):
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 def _open(policy, raw, *, write=False):
     root, path = check_path(policy, raw)
     parts = path.relative_to(root).parts
     parent = None
     fd = None
     try:
-        parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        for part in parts[:-1]:
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
-            os.close(parent)
-            parent = child
+        parent = _directory_fd(root, parts[:-1])
         flags = os.O_WRONLY | os.O_CREAT if write else os.O_RDONLY
         fd = os.open(parts[-1], flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=parent)
         info = os.fstat(fd)
@@ -133,6 +143,41 @@ def filesystem_tools(policy):
             handle.write(data)
         return {"written": len(data)}
 
+    def list_directory(path):
+        root, directory = check_path(policy, path, allow_root=True)
+        descriptor = None
+        entries = []
+        truncated = False
+        try:
+            descriptor = _directory_fd(root, directory.relative_to(root).parts)
+            with os.scandir(descriptor) as iterator:
+                for index, entry in enumerate(iterator):
+                    check_run()
+                    if index >= 1000:
+                        truncated = True
+                        break
+                    try:
+                        check_path(policy, str(directory / entry.name))
+                        info = entry.stat(follow_symlinks=False)
+                    except (SecurityError, OSError):
+                        continue
+                    if stat.S_ISDIR(info.st_mode):
+                        kind = "directory"
+                    elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                        kind = "file"
+                    else:
+                        continue
+                    if len(entries) >= 200:
+                        truncated = True
+                        break
+                    entries.append({"name": entry.name, "type": kind})
+        except OSError as exc:
+            raise SecurityError("path_unavailable") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        return {"entries": sorted(entries, key=lambda item: item["name"]), "truncated": truncated}
+
     props = {"path": {"type": "string", "minLength": 1, "maxLength": 4096}}
     read_schema = {
         "type": "object",
@@ -149,4 +194,15 @@ def filesystem_tools(policy):
     return [
         Tool("read_file", read_schema, ("filesystem.read",), read_file, {"path": "path"}),
         Tool("write_file", write_schema, ("filesystem.write",), write_file, {"path": "path"}),
+        Tool(
+            "list_directory",
+            {
+                **read_schema,
+                "description": "List allowed files/folders. Use path '.' for the approved root. "
+                "No recursion; results are bounded and sensitive entries are omitted.",
+            },
+            ("filesystem.read",),
+            list_directory,
+            {"path": "directory"},
+        ),
     ]

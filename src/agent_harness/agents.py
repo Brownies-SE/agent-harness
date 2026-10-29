@@ -22,7 +22,7 @@ class State(TypedDict):
     answer: str
 
 
-class NativeAgent:
+class LangGraphAgent:
     def __init__(
         self, model, executor, *, max_steps=None, limits=None, history=None, on_event=None
     ):
@@ -97,19 +97,8 @@ class NativeAgent:
         self.last_run = RunControl(
             self.limits, cancel=cancel, history=self.history, on_event=self.on_event
         )
-        runner = "langgraph" if isinstance(self, LangGraphAgent) else "native"
-        with self.last_run.activate(runner):
+        with self.last_run.activate():
             return self._run(prompt)
-
-    def _run(self, prompt):
-        state = self.initial(prompt)
-        while not state["done"]:
-            state = self.step(state)
-        return state["answer"]
-
-
-class LangGraphAgent(NativeAgent):
-    """A real compiled StateGraph; its only execution node calls the native shared step."""
 
     def _run(self, prompt):
         from langgraph.graph import END, START, StateGraph

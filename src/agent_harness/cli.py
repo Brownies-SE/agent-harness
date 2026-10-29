@@ -7,15 +7,14 @@ import threading
 from contextlib import contextmanager
 from dataclasses import replace
 
-from .agents import LangGraphAgent, NativeAgent
+from .agents import LangGraphAgent
 from .config import load_config
 from .errors import SecurityError
 from .executor import Executor
-from .filesystem import filesystem_tools
 from .history import RunHistory, safe_event
 from .model import LocalModel
-from .network import http_tool
 from .runtime import RunStopped, check_run
+from .tools import builtin_tools
 
 
 def terminal_approval(details):
@@ -55,7 +54,6 @@ def main():
     parser = argparse.ArgumentParser(description="The model proposes. The harness decides.")
     parser.add_argument("command", choices=["validate", "run", "history", "eval"])
     parser.add_argument("--config", default="harness.yaml")
-    parser.add_argument("--agent", choices=["native", "langgraph", "both"], default="native")
     parser.add_argument("--prompt")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--timeout-seconds", type=float)
@@ -86,8 +84,8 @@ def main():
         if args.command == "validate":
             print("Configuration valid; capabilities remain subject to policy checks.")
             return 0
-        if args.command == "run" and (args.prompt is None or args.agent == "both"):
-            parser.error("run requires --prompt and a single --agent")
+        if args.command == "run" and args.prompt is None:
+            parser.error("run requires --prompt")
         history = (
             None if args.no_history else RunHistory(args.history_dir, roots=config.policy.roots)
         )
@@ -98,7 +96,6 @@ def main():
 
                 result = evaluate(
                     config,
-                    runner=args.agent,
                     repeats=args.repeat,
                     limits=limits,
                     history=history,
@@ -107,17 +104,17 @@ def main():
                 print(json.dumps(result))
                 return 0 if result["passed"] == result["total"] else 1
             executor = Executor(config.policy, approve=terminal_approval)
-            for tool in filesystem_tools(config.policy):
+            for tool in builtin_tools(config.policy):
                 executor.register(tool)
-            executor.register(http_tool(config.policy))
             model = LocalModel(
                 config.policy,
                 endpoint=config.endpoint,
                 model=config.model,
                 provider=config.provider,
             )
-            runner = NativeAgent if args.agent == "native" else LangGraphAgent
-            agent = runner(model, executor, limits=limits, history=history, on_event=print_event)
+            agent = LangGraphAgent(
+                model, executor, limits=limits, history=history, on_event=print_event
+            )
             answer = agent.run(args.prompt, cancel=cancel)
             print(json.dumps({"run_id": agent.last_run.id, "answer": answer}, ensure_ascii=True))
             return 0
@@ -133,7 +130,7 @@ def main():
             + (
                 str(exc)
                 if isinstance(exc, SecurityError)
-                else "invalid configuration or missing optional dependency"
+                else "invalid configuration or missing dependency"
             ),
             file=sys.stderr,
         )

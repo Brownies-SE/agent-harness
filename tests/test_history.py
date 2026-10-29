@@ -5,7 +5,7 @@ import threading
 import pytest
 from test_runtime import Decisions
 
-from agent_harness.agents import LangGraphAgent, NativeAgent
+from agent_harness.agents import LangGraphAgent
 from agent_harness.errors import SecurityError
 from agent_harness.executor import Executor, Tool
 from agent_harness.filesystem import filesystem_tools
@@ -14,7 +14,6 @@ from agent_harness.policy import Policy
 from agent_harness.runtime import RunLimits
 
 
-@pytest.mark.parametrize("runner", [NativeAgent, LangGraphAgent])
 def test_history_persists_metadata_but_not_prompt_paths_contents_or_answer(tmp_path, runner):
     workspace = tmp_path / "project"
     workspace.mkdir()
@@ -70,7 +69,6 @@ def test_history_refuses_symlink_and_hardlink_database(tmp_path):
     assert outside.read_text() == "do not modify"
 
 
-@pytest.mark.parametrize("runner", [NativeAgent, LangGraphAgent])
 @pytest.mark.parametrize(
     "mode,expected", [("cancel", "cancelled"), ("error", "failed"), ("limit", "limited")]
 )
@@ -95,9 +93,7 @@ def test_stopped_runs_have_durable_terminal_status(tmp_path, runner, mode, expec
 
 def test_unknown_error_details_and_extra_event_fields_are_redacted(tmp_path):
     history = RunHistory(tmp_path / "state")
-    history.begin(
-        "a" * 32, "native", {"max_steps": 8, "timeout_seconds": 120, "max_output_tokens": 512}
-    )
+    history.begin("a" * 32, {"max_steps": 8, "timeout_seconds": 120, "max_output_tokens": 512})
     history.append(
         "a" * 32,
         {
@@ -137,7 +133,7 @@ def test_history_failure_prevents_tool_dispatch(tmp_path):
         )
     )
     model = Decisions([{"tool": "noop", "arguments": {}}, {"final": "done"}])
-    agent = NativeAgent(model, executor, history=BrokenHistory())
+    agent = LangGraphAgent(model, executor, history=BrokenHistory())
     agent.run("test")
     assert called == []
 
@@ -146,12 +142,12 @@ def test_agent_rejects_history_inside_its_tool_roots(tmp_path):
     history = RunHistory(tmp_path / "state")
     executor = Executor(Policy(roots=(tmp_path,), rules={"filesystem.read": "allow"}))
     with pytest.raises(ValueError, match="outside"):
-        NativeAgent(Decisions([]), executor, history=history)
+        LangGraphAgent(Decisions([]), executor, history=history)
 
 
 def test_malformed_event_fields_cannot_escape_redaction(tmp_path):
     history = RunHistory(tmp_path / "state")
-    history.begin("b" * 32, "native", {})
+    history.begin("b" * 32, {})
     history.append(
         "b" * 32, {"event": ["secret"], "reason": {"secret": True}, "status": ["secret"]}
     )
@@ -160,7 +156,7 @@ def test_malformed_event_fields_cannot_escape_redaction(tmp_path):
 
 def test_failed_run_preserves_safe_error_code_without_exception_text(tmp_path):
     history = RunHistory(tmp_path / "state")
-    agent = NativeAgent(Decisions([{"invalid": True}]), Executor(Policy()), history=history)
+    agent = LangGraphAgent(Decisions([{"invalid": True}]), Executor(Policy()), history=history)
     with pytest.raises(SecurityError):
         agent.run("private-prompt")
     assert history.list_runs()[0]["reason"] == "invalid_model_response"
