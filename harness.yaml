@@ -29,3 +29,9 @@ network:
   default: deny
   allow: []
   ports: []
+
+# Shared by native and LangGraph; CLI flags can override these per run.
+run:
+  max_steps: 8
+  timeout_seconds: 120
+  max_output_tokens: 512

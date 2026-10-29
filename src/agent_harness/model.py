@@ -3,6 +3,7 @@ import json
 from .errors import SecurityError
 from .executor import json_copy
 from .network import check_url, transport
+from .runtime import RunLimits, check_run
 
 
 def strict_json(raw):
@@ -34,6 +35,7 @@ class LocalModel:
 
     def decide(self, messages, tools):
         # Recheck every call, then connect using only this checked/pinned result.
+        control = check_run()
         target = check_url(self.policy, self.url, inference=True)
         wire_messages = []
         for message in messages:
@@ -56,12 +58,24 @@ class LocalModel:
         )
         body = json.dumps(
             json_copy(
-                {"model": self.model, "messages": wire_messages, "stream": False, "temperature": 0},
+                {
+                    "model": self.model,
+                    "messages": wire_messages,
+                    "stream": False,
+                    "temperature": 0,
+                    "max_tokens": control.limits.max_output_tokens
+                    if control
+                    else RunLimits().max_output_tokens,
+                },
                 1024 * 1024,
             )
         ).encode()
         try:
             response = strict_json(transport(target, method="POST", body=body, timeout=60))
+            if not isinstance(response, dict):
+                raise ValueError("provider response must be an object")
+            if control is not None:
+                control.usage(response.get("usage", {}))
             content = response["choices"][0]["message"]["content"]
             if not isinstance(content, str):
                 raise ValueError
