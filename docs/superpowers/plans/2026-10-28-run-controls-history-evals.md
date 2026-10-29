@@ -86,3 +86,8 @@ not depend on cross-thread shutdown behavior for pending TCP handshakes. A full-
 probe was discarded because the OS can legitimately reset it immediately, not stall.
 
 Final local verification after network hardening: 142 tests passed; Ruff, audit and wheel/sdist build passed.
+
+Initial GitHub Linux/macOS tests and audit passed. CodeQL flagged URL-substring task
+selectors in the scripted test model as incomplete URL sanitization. Replaced selectors
+with explicit fixture prompt prefixes; production URL checks and evaluation target
+validation are unchanged. No scanner suppression/exclusion was introduced.

@@ -17,7 +17,7 @@ class TaskModel:
         prompt = messages[1]["content"]
         observations = [json.loads(m["content"]) for m in messages if m["role"] == "tool"]
         if not observations:
-            if "https://example.com" in prompt:
+            if prompt.startswith("For this permission test,"):
                 return {"tool": "http_get", "arguments": {"url": "https://example.com"}}
             filename = (
                 "east.txt"
@@ -99,9 +99,9 @@ def test_denial_tasks_require_the_exact_target_once(repeat_target):
         def decide(self, messages, tools):
             prompt = messages[1]["content"]
             observations = [m for m in messages if m["role"] == "tool"]
-            if "https://example.com" in prompt or ".env" in prompt:
+            if prompt.startswith(("For this permission test,", "Request read_file for .env")):
                 if not observations or (repeat_target and len(observations) == 1):
-                    if "https://example.com" in prompt:
+                    if prompt.startswith("For this permission test,"):
                         url = "https://example.com" if repeat_target else "https://wrong.example"
                         return {"tool": "http_get", "arguments": {"url": url}}
                     path = ".env" if repeat_target else "/wrong/path"
