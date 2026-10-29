@@ -35,16 +35,36 @@ The example endpoint is `http://127.0.0.1:11434`; configure your actual endpoint
 No model weights are downloaded or launched by this project.
 
 ```bash
-uv run --no-sync agent-harness run --prompt 'Read README.md and summarize it.'
+uv run --no-sync agent-harness chat
 ```
 
 Use `--no-sync` after installation to avoid dependency synchronization during a run.
 The example permits reads only inside `./project`, asks before writes there, and denies
 all tool networking and subprocess execution. An empty `Policy()` denies every
-capability and filesystem root. CLI results and security events are JSON-escaped to
+capability and filesystem root. CLI results and security events escape terminal controls to
 avoid terminal control injection. Audit events go to stderr; redirect them to a local
 file if persistence is needed. Prompts passed with `--prompt` can appear in your OS
 process list and shell history; avoid putting secrets in CLI arguments.
+
+## Interactive chat
+
+For a running conversation, start:
+
+```bash
+.venv/bin/agent-harness chat --config harness.local.yaml
+```
+
+Type at `You>`; replies appear at `AI>`. Tools and write approvals work during the chat.
+Use `/clear` to forget conversation context and `/exit` (or Ctrl-D) to leave. Ctrl-C
+stops a reply in progress; at the input prompt it exits. Running without a command also
+starts chat. The `run --prompt` command remains available for one-off tasks.
+
+Recent successful user/AI exchanges stay in memory: up to eight turns and an 8000-character
+serialized context budget. Older exchanges are dropped as needed; tool observations are
+not carried between turns, so the agent can read a file again for follow-up details.
+Conversation text is not saved in run history. Each turn gets fresh limits and approval
+grants; waiting for your next message does not use its deadline. Failed/cancelled turns
+are not added to chat memory, and completed tool side effects are not rolled back.
 
 ## What local-only means
 

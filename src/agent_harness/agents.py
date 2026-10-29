@@ -37,6 +37,7 @@ class LangGraphAgent:
             history.check_roots(executor.policy.roots)
         self.on_event = on_event
         self.last_run = None
+        self._context = []
 
     def initial(self, prompt):
         if not isinstance(prompt, str):
@@ -44,7 +45,11 @@ class LangGraphAgent:
         self.executor.start_run()
         return State(
             messages=json_copy(
-                [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
+                [
+                    {"role": "system", "content": SYSTEM},
+                    *self._context,
+                    {"role": "user", "content": prompt},
+                ]
             ),
             steps=0,
             done=False,
@@ -93,7 +98,18 @@ class LangGraphAgent:
         ]
         return State(messages=messages, steps=state["steps"] + 1, done=False, answer="")
 
-    def run(self, prompt, *, cancel=None):
+    def run(self, prompt, *, cancel=None, context=None):
+        context = json_copy(context if context is not None else [])
+        if not isinstance(context, list) or any(
+            not isinstance(message, dict)
+            or set(message) != {"role", "content"}
+            or not isinstance(message["role"], str)
+            or message["role"] not in {"user", "assistant"}
+            or not isinstance(message["content"], str)
+            for message in context
+        ):
+            raise SecurityError("invalid_request")
+        self._context = context
         self.last_run = RunControl(
             self.limits, cancel=cancel, history=self.history, on_event=self.on_event
         )
