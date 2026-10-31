@@ -46,6 +46,37 @@ jobs:
           python-version: '3.11'
       - run: uv sync --locked --extra dev
       - run: uv run --no-sync pip-audit --skip-editable
+  postgres:
+    name: PostgreSQL chat integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: harness_test
+          POSTGRES_PASSWORD: synthetic_ci_password
+          POSTGRES_DB: harness_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      HARNESS_TEST_DATABASE_URL: postgresql://harness_test:synthetic_ci_password@127.0.0.1:5432/harness_test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: '0.13.6'
+          enable-cache: false
+          python-version: '3.11'
+      - run: uv sync --locked --extra dev
+      - run: uv run --no-sync pytest -q
   security:
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -5,13 +5,13 @@ import threading
 import pytest
 from test_runtime import Decisions
 
-from agent_harness.agents import LangGraphAgent
-from agent_harness.errors import SecurityError
-from agent_harness.executor import Executor, Tool
-from agent_harness.filesystem import filesystem_tools
+from agent_harness.core.agents import LangGraphAgent
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.executor import Executor, Tool
+from agent_harness.core.policy import Policy
+from agent_harness.core.runtime import RunLimits
 from agent_harness.history import RunHistory
-from agent_harness.policy import Policy
-from agent_harness.runtime import RunLimits
+from agent_harness.tools.filesystem import filesystem_tools
 
 
 def test_history_persists_metadata_but_not_prompt_paths_contents_or_answer(tmp_path, runner):

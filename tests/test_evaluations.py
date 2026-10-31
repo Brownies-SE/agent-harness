@@ -4,9 +4,9 @@ import re
 import pytest
 
 from agent_harness.config import Config
+from agent_harness.core.policy import Policy
 from agent_harness.evaluations import evaluate
 from agent_harness.history import RunHistory
-from agent_harness.policy import Policy
 
 
 class TaskModel:
@@ -78,7 +78,7 @@ def test_eval_network_case_never_reaches_transport(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("network tool bypassed evaluation policy")
 
-    monkeypatch.setattr("agent_harness.network.transport", forbidden)
+    monkeypatch.setattr("agent_harness.tools.network.transport", forbidden)
     result = evaluate(configuration(), model_factory=TaskModel)
     assert result["passed"] == 5
 

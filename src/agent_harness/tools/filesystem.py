@@ -1,0 +1,222 @@
+import fnmatch
+import os
+import stat
+from pathlib import Path
+
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.executor import Tool
+from agent_harness.core.runtime import check_run
+from agent_harness.models.tools import (
+    DirectoryResult,
+    PathArguments,
+    TextResult,
+    WriteFileArguments,
+    WriteFileResult,
+)
+
+SENSITIVE_PARTS = {
+    ".ssh",
+    ".aws",
+    ".config",
+    ".gnupg",
+    ".azure",
+    ".kube",
+    ".docker",
+    "browser",
+    "browsers",
+    "google",
+    "chromium",
+    "chrome",
+    "firefox",
+    "safari",
+    "keychains",
+    "mozilla",
+}
+SENSITIVE_FILES = (
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "credentials*",
+    "*credentials*",
+    "id_rsa*",
+    "id_ed25519*",
+    "cookies*",
+    "login data",
+    "*.p12",
+    "*.pfx",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    "*token*",
+    "*secret*",
+)
+MAX_FILE_BYTES = 128 * 1024
+
+
+def check_path(policy, raw, *, allow_root=False):
+    if not isinstance(raw, str) or not raw or "\x00" in raw or "\\" in raw:
+        raise SecurityError("invalid_path")
+    path = Path(raw)
+    if ".." in path.parts or raw.startswith("~"):
+        raise SecurityError("path_traversal")
+    if not path.is_absolute():
+        if not policy.roots:
+            raise SecurityError("path_outside_roots")
+        path = policy.roots[0] / path
+    for root in policy.roots:
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if not relative.parts and not allow_root:
+            raise SecurityError("file_required")
+        sensitive = any(part.lower() in SENSITIVE_PARTS for part in path.parts)
+        sensitive |= any(
+            fnmatch.fnmatch(part.lower(), pattern)
+            for part in path.parts
+            for pattern in SENSITIVE_FILES
+        )
+        if sensitive and path not in policy.sensitive_allow:
+            raise SecurityError("sensitive_path")
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise SecurityError("symlink_denied")
+        return root, path
+    raise SecurityError("path_outside_roots")
+
+
+def _directory_fd(root, parts):
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _open(policy, raw, *, write=False):
+    root, path = check_path(policy, raw)
+    parts = path.relative_to(root).parts
+    parent = None
+    fd = None
+    try:
+        parent = _directory_fd(root, parts[:-1])
+        flags = os.O_WRONLY | os.O_CREAT if write else os.O_RDONLY
+        fd = os.open(parts[-1], flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=parent)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise SecurityError("unsafe_file")
+        return fd
+    except SecurityError:
+        if fd is not None:
+            os.close(fd)
+        raise
+    except OSError as exc:
+        if fd is not None:
+            os.close(fd)
+        raise SecurityError("path_unavailable") from exc
+    finally:
+        if parent is not None:
+            os.close(parent)
+
+
+def filesystem_tools(policy):
+    if os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("secure filesystem tools require POSIX no-follow opens")
+
+    def read_file(path):
+        with os.fdopen(_open(policy, path), "rb") as handle:
+            data = handle.read(MAX_FILE_BYTES + 1)
+        if len(data) > MAX_FILE_BYTES:
+            raise SecurityError("file_too_large")
+        try:
+            return data.decode("utf-8")
+        except UnicodeError as exc:
+            raise SecurityError("text_file_required") from exc
+
+    def write_file(path, content):
+        data = content.encode("utf-8")
+        if len(data) > MAX_FILE_BYTES:
+            raise SecurityError("file_too_large")
+        with os.fdopen(_open(policy, path, write=True), "wb") as handle:
+            os.ftruncate(handle.fileno(), 0)
+            handle.write(data)
+        return {"written": len(data)}
+
+    def list_directory(path):
+        root, directory = check_path(policy, path, allow_root=True)
+        descriptor = None
+        entries = []
+        truncated = False
+        try:
+            descriptor = _directory_fd(root, directory.relative_to(root).parts)
+            with os.scandir(descriptor) as iterator:
+                for index, entry in enumerate(iterator):
+                    check_run()
+                    if index >= 1000:
+                        truncated = True
+                        break
+                    try:
+                        check_path(policy, str(directory / entry.name))
+                        info = entry.stat(follow_symlinks=False)
+                    except (SecurityError, OSError):
+                        continue
+                    if stat.S_ISDIR(info.st_mode):
+                        kind = "directory"
+                    elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                        kind = "file"
+                    else:
+                        continue
+                    if len(entries) >= 200:
+                        truncated = True
+                        break
+                    entries.append({"name": entry.name, "type": kind})
+        except OSError as exc:
+            raise SecurityError("path_unavailable") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        return {"entries": sorted(entries, key=lambda item: item["name"]), "truncated": truncated}
+
+    read_schema = PathArguments.model_json_schema()
+    write_schema = WriteFileArguments.model_json_schema()
+    return [
+        Tool(
+            "read_file",
+            read_schema,
+            ("filesystem.read",),
+            read_file,
+            {"path": "path"},
+            PathArguments,
+            TextResult,
+        ),
+        Tool(
+            "write_file",
+            write_schema,
+            ("filesystem.write",),
+            write_file,
+            {"path": "path"},
+            WriteFileArguments,
+            WriteFileResult,
+        ),
+        Tool(
+            "list_directory",
+            {
+                **read_schema,
+                "description": "List allowed files/folders. Use path '.' for the approved root. "
+                "No recursion; results are bounded and sensitive entries are omitted.",
+            },
+            ("filesystem.read",),
+            list_directory,
+            {"path": "directory"},
+            PathArguments,
+            DirectoryResult,
+        ),
+    ]

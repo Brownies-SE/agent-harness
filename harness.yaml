@@ -3,6 +3,13 @@ security:
   local_only: true
   telemetry: false
 
+embeddings:
+  endpoint: http://127.0.0.1:11434
+  model: mxbai-embed-large
+
+mcp_endpoints: {}
+mcp_permissions: {}
+
 model:
   provider: local
   endpoint: http://127.0.0.1:11434
@@ -12,6 +19,7 @@ permissions:
   filesystem.read: allow
   filesystem.write: ask
   network: deny
+  weather.read: deny  # Opt in to fixed Open-Meteo endpoints only.
   subprocess: deny
   process.read: deny
   process.write: deny

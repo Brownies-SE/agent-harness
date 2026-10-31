@@ -4,11 +4,11 @@ from datetime import datetime, timezone
 import pytest
 from test_runtime import Decisions
 
-from agent_harness.clock import current_time_tool
-from agent_harness.errors import SecurityError
-from agent_harness.executor import Executor, Tool
-from agent_harness.filesystem import filesystem_tools
-from agent_harness.policy import Policy
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.executor import Executor, Tool
+from agent_harness.core.policy import Policy
+from agent_harness.tools.clock import current_time_tool
+from agent_harness.tools.filesystem import filesystem_tools
 
 
 def tools(tmp_path, *, rules=None, sensitive_allow=()):

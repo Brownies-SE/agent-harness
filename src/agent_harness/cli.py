@@ -1,43 +1,20 @@
 import argparse
 import json
-import select
 import signal
 import sys
 import threading
 from contextlib import contextmanager
 from dataclasses import replace
 
-from .agents import LangGraphAgent
+from agent_harness.core.agents import LangGraphAgent
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.executor import Executor
+from agent_harness.core.runtime import RunStopped
+from agent_harness.tools import builtin_tools
+
 from .config import load_config
-from .errors import SecurityError, safe_reason
-from .executor import Executor
 from .history import RunHistory, safe_event
 from .model import LocalModel
-from .runtime import RunStopped, check_run
-from .terminal_ui import print_approval, print_block, print_reply, terminal_text
-from .tools import builtin_tools
-
-
-def terminal_approval(details):
-    print_approval(details)
-    if not sys.stdin.isatty():
-        return "deny"
-    content = details["arguments"].get("content")
-    while True:
-        print("\n  [y] once   [a] same request this turn   [n] deny", file=sys.stderr)
-        if isinstance(content, str):
-            print("  [v] full content", file=sys.stderr)
-        print("  Allow: ", end="", file=sys.stderr, flush=True)
-        while True:
-            check_run()
-            if select.select([sys.stdin], [], [], 0.1)[0]:
-                answer = sys.stdin.readline().strip().lower()
-                break
-        if answer == "v" and isinstance(content, str):
-            print("\n  Full content", file=sys.stderr)
-            print_block(content, stream=sys.stderr, indent="    ")
-            continue
-        return {"y": "once", "a": "run"}.get(answer, "deny")
 
 
 @contextmanager
@@ -63,7 +40,7 @@ def print_event(event):
 
 
 def build_agent(config, limits, history, *, on_event=None):
-    executor = Executor(config.policy, approve=terminal_approval)
+    executor = Executor(config.policy)
     for tool in builtin_tools(config.policy):
         executor.register(tool)
     model = LocalModel(
@@ -75,51 +52,9 @@ def build_agent(config, limits, history, *, on_event=None):
     return LangGraphAgent(model, executor, limits=limits, history=history, on_event=on_event)
 
 
-def chat_loop(agent, *, model_name="local model"):
-    messages = []
-    print("\nAgent Harness")
-    print("Model: " + terminal_text(model_name, multiline=False))
-    print("/clear reset conversation  /exit quit\n")
-    while True:
-        try:
-            prompt = input("You > ")
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return 0
-        command = prompt.strip().lower()
-        if command in {"/exit", "/quit"}:
-            return 0
-        if command == "/clear":
-            messages.clear()
-            print("\nConversation cleared.\n")
-            continue
-        if not prompt.strip():
-            continue
-        cancel = threading.Event()
-        with cancellation_signals(cancel) as received:
-            try:
-                answer = agent.run(prompt, context=messages, cancel=cancel)
-            except SecurityError as exc:
-                print("Turn stopped: " + safe_reason(str(exc)))
-                if signal.SIGTERM in received:
-                    return 143
-                continue
-        print_reply(answer)
-        messages.extend(
-            [
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": json.dumps({"final": answer})},
-            ]
-        )
-        while messages and (len(messages) > 16 or len(json.dumps(messages)) > 8000):
-            del messages[:2]
-
-
 def main():
     parser = argparse.ArgumentParser(description="The model proposes. The harness decides.")
-    parser.add_argument(
-        "command", nargs="?", default="chat", choices=["chat", "validate", "run", "history", "eval"]
-    )
+    parser.add_argument("command", nargs="?", choices=["validate", "run", "history", "eval"])
     parser.add_argument("--config", default="harness.yaml")
     parser.add_argument("--prompt")
     parser.add_argument("--max-steps", type=int)
@@ -131,6 +66,9 @@ def main():
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--repeat", type=int, default=1)
     args = parser.parse_args()
+    if args.command is None:
+        parser.print_help()
+        return 0
     try:
         if args.command == "history":
             history = RunHistory(args.history_dir)
@@ -156,10 +94,6 @@ def main():
         history = (
             None if args.no_history else RunHistory(args.history_dir, roots=config.policy.roots)
         )
-        if args.command == "chat":
-            if args.prompt is not None:
-                parser.error("chat reads messages interactively; use run for --prompt")
-            return chat_loop(build_agent(config, limits, history), model_name=config.model)
         cancel = threading.Event()
         with cancellation_signals(cancel):
             if args.command == "eval":
