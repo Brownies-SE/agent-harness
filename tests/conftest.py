@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 
-from agent_harness.agents import LangGraphAgent
+from agent_harness.core.agents import LangGraphAgent
 
 
 @pytest.fixture

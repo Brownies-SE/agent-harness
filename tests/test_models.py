@@ -1,10 +1,10 @@
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from agent_harness.executor import Executor, Tool
+from agent_harness.core.executor import Executor, Tool
+from agent_harness.core.policy import Policy
 from agent_harness.models.chat import SendMessage
 from agent_harness.models.tools import PathArguments, ToolRequest, WriteFileArguments
-from agent_harness.policy import Policy
 
 
 @pytest.mark.parametrize(
@@ -58,7 +58,7 @@ def test_host_argument_model_cannot_be_bypassed_by_permissive_schema():
             input_model=PathArguments,
         )
     )
-    from agent_harness.errors import SecurityError
+    from agent_harness.core.errors import SecurityError
 
     with pytest.raises(SecurityError, match="invalid_arguments"):
         executor.execute({"tool": "typed", "arguments": {"path": 1}})
@@ -80,7 +80,7 @@ def test_builtin_result_model_rejects_handler_type_confusion():
             output_model=Result,
         )
     )
-    from agent_harness.errors import SecurityError
+    from agent_harness.core.errors import SecurityError
 
     with pytest.raises(SecurityError, match="tool_failed"):
         executor.execute({"tool": "typed_result", "arguments": {}})

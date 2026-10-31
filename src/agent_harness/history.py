@@ -9,8 +9,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .errors import SecurityError, safe_reason
-from .runtime import RunLimits
+from agent_harness.core.errors import SecurityError, safe_reason
+from agent_harness.core.runtime import RunLimits
 
 EVENTS = frozenset(
     {

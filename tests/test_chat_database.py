@@ -4,11 +4,11 @@ from threading import Event
 
 import pytest
 
-from agent_harness.agents import LangGraphAgent
-from agent_harness.errors import SecurityError
-from agent_harness.executor import Executor
+from agent_harness.core.agents import LangGraphAgent
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.executor import Executor
+from agent_harness.core.policy import Policy
 from agent_harness.models.chat import ConversationCreate, ConversationRename, SendMessage
-from agent_harness.policy import Policy
 from agent_harness.services.chat import ChatService
 from agent_harness.services.database import ChatError, Database
 
@@ -38,6 +38,209 @@ def service(database, owner, callback=lambda messages: {"final": "hello"}):
 def test_database_cannot_escape_loopback_or_load_service_configuration(url):
     with pytest.raises(ValueError):
         Database(url)
+
+
+def test_complete_requested_schema_exists_and_migration_is_idempotent(chat_database):
+    database, owner = chat_database
+    chat = service(database, owner)
+    conversation = chat.create(ConversationCreate(title="preserved"))
+    chat.send(conversation.id, SendMessage(content="keep this"))
+    database.migrate()
+    with database.connect() as connection:
+        tables = {
+            row["table_name"]
+            for row in connection.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='agent_chat'"
+            ).fetchall()
+        }
+        assert tables == {
+            "schema_migrations",
+            "users",
+            "conversations",
+            "messages",
+            "mcp_servers",
+            "mcp_connections",
+            "mcp_tools",
+            "tool_permissions",
+            "tool_calls",
+            "files",
+            "memories",
+        }
+        columns = {
+            (row["table_name"], row["column_name"])
+            for row in connection.execute(
+                "SELECT table_name,column_name FROM information_schema.columns "
+                "WHERE table_schema='agent_chat'"
+            ).fetchall()
+        }
+        assert {
+            ("conversations", "summary"),
+            ("conversations", "compacted_through_message_id"),
+            ("conversations", "memory_processed_at"),
+            ("messages", "cache_read_tokens"),
+        } <= columns
+        assert (
+            connection.execute(
+                "SELECT a.atttypmod AS dimensions FROM pg_attribute a JOIN pg_class c "
+                "ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname='agent_chat' AND c.relname='memories' AND a.attname='embedding'"
+            ).fetchone()["dimensions"]
+            == 1024
+        )
+        assert [
+            row["version"]
+            for row in connection.execute(
+                "SELECT version FROM agent_chat.schema_migrations ORDER BY version"
+            ).fetchall()
+        ] == [1, 2]
+    assert chat.get(conversation.id).title == "preserved"
+    assert len(chat.messages(conversation.id)) == 2
+
+
+def test_v1_upgrade_preserves_rows_and_enforces_scoped_references(chat_database):
+    from importlib.resources import files
+    from uuid import uuid4
+
+    import psycopg
+    from psycopg import sql
+
+    database, _ = chat_database
+    namespace = "upgrade_" + uuid4().hex
+    with database.connect() as connection:
+
+        def execute(statement, parameters=()):
+            return connection.execute(
+                sql.SQL(statement).format(ns=sql.Identifier(namespace)), parameters
+            )
+
+        try:
+            execute("CREATE SCHEMA {ns}")
+            migration_root = files("agent_harness.migrations")
+            for filename in ("0001_chat.sql", "0002_resources.sql"):
+                migration = migration_root.joinpath(filename).read_text()
+                connection.execute(migration.replace("agent_chat.", namespace + "."))
+                if filename == "0001_chat.sql":
+                    owner = execute(
+                        "INSERT INTO {ns}.users(email) VALUES ('synthetic@localhost') RETURNING id"
+                    ).fetchone()["id"]
+                    stranger = execute(
+                        "INSERT INTO {ns}.users(email) VALUES ('other@localhost') RETURNING id"
+                    ).fetchone()["id"]
+                    conversation = execute(
+                        "INSERT INTO {ns}.conversations(user_id,title) "
+                        "VALUES (%s,'keep') RETURNING id",
+                        (owner,),
+                    ).fetchone()["id"]
+                    other = execute(
+                        "INSERT INTO {ns}.conversations(user_id,title) "
+                        "VALUES (%s,'other') RETURNING id",
+                        (stranger,),
+                    ).fetchone()["id"]
+                    message = execute(
+                        "INSERT INTO {ns}.messages(conversation_id,seq,role,content) "
+                        "VALUES (%s,1,'user','[]') RETURNING id",
+                        (conversation,),
+                    ).fetchone()["id"]
+                    other_message = execute(
+                        "INSERT INTO {ns}.messages(conversation_id,seq,role,content) "
+                        "VALUES (%s,1,'user','[]') RETURNING id",
+                        (other,),
+                    ).fetchone()["id"]
+            assert execute(
+                "SELECT title,summary FROM {ns}.conversations WHERE id=%s", (conversation,)
+            ).fetchone() == {"title": "keep", "summary": None}
+            assert (
+                execute(
+                    "SELECT cache_read_tokens FROM {ns}.messages WHERE id=%s", (message,)
+                ).fetchone()["cache_read_tokens"]
+                == 0
+            )
+
+            for statement, arguments in (
+                (
+                    "UPDATE {ns}.conversations SET compacted_through_message_id=%s WHERE id=%s",
+                    (other_message, conversation),
+                ),
+                (
+                    "INSERT INTO {ns}.files(user_id,conversation_id,storage_key,filename,origin) "
+                    "VALUES (%s,%s,'local/blob','note.txt','upload')",
+                    (owner, other),
+                ),
+                (
+                    "INSERT INTO {ns}.memories(user_id,source_conversation_id,content,source) "
+                    "VALUES (%s,%s,'synthetic','stated')",
+                    (owner, other),
+                ),
+            ):
+                with pytest.raises(psycopg.errors.ForeignKeyViolation), connection.transaction():
+                    execute(statement, arguments)
+
+            execute(
+                "UPDATE {ns}.conversations SET compacted_through_message_id=%s WHERE id=%s",
+                (message, conversation),
+            )
+            execute(
+                "INSERT INTO {ns}.files(user_id,conversation_id,storage_key,filename,origin) "
+                "VALUES (%s,%s,'local/blob','note.txt','upload')",
+                (owner, conversation),
+            )
+            execute(
+                "INSERT INTO {ns}.memories(user_id,source_conversation_id,content,source) "
+                "VALUES (%s,%s,'synthetic','stated')",
+                (owner, conversation),
+            )
+            execute("DELETE FROM {ns}.messages WHERE id=%s", (message,))
+            assert (
+                execute(
+                    "SELECT compacted_through_message_id FROM {ns}.conversations WHERE id=%s",
+                    (conversation,),
+                ).fetchone()["compacted_through_message_id"]
+                is None
+            )
+            execute("DELETE FROM {ns}.conversations WHERE id=%s", (conversation,))
+            assert (
+                execute("SELECT conversation_id FROM {ns}.files").fetchone()["conversation_id"]
+                is None
+            )
+            assert (
+                execute("SELECT source_conversation_id FROM {ns}.memories").fetchone()[
+                    "source_conversation_id"
+                ]
+                is None
+            )
+        finally:
+            # The temporary schema and all fixtures disappear without touching existing test data.
+            connection.rollback()
+
+
+def test_stored_allow_policy_cannot_authorize_a_tool(chat_database, tmp_path):
+    from agent_harness.tools import builtin_tools
+
+    database, owner = chat_database
+    with database.connect() as connection:
+        connection.execute(
+            "INSERT INTO agent_chat.tool_permissions(user_id,tool_key,policy) "
+            "VALUES (%s,'builtin:write_file','allow')",
+            (owner,),
+        )
+    decisions = iter(
+        [
+            {"tool": "write_file", "arguments": {"path": "note.txt", "content": "forbidden"}},
+            {"final": "denied"},
+        ]
+    )
+    policy = Policy(roots=(tmp_path,), rules={"filesystem.write": "ask"})
+
+    def agent():
+        executor = Executor(policy)
+        for tool in builtin_tools(policy):
+            executor.register(tool)
+        return LangGraphAgent(Model(lambda messages: next(decisions)), executor)
+
+    chat = ChatService(database, owner, agent)
+    conversation = chat.create(ConversationCreate())
+    chat.send(conversation.id, SendMessage(content="write it"))
+    assert not (tmp_path / "note.txt").exists()
 
 
 def test_conversations_and_messages_survive_service_restart(chat_database):

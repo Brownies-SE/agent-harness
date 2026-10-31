@@ -11,11 +11,11 @@ from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ValidationError
 from referencing import Registry
 
-from .errors import SecurityError
-from .models.tools import ToolRequest
-from .policy import Policy
-from .runtime import RunStopped, check_run, current_run
-from .schema import validate_schema
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.policy import Policy
+from agent_harness.core.runtime import RunStopped, check_run, current_run
+from agent_harness.core.schema import validate_schema
+from agent_harness.models.tools import ToolRequest
 
 MAX_REQUEST_BYTES = 128 * 1024
 MAX_RESULT_BYTES = 256 * 1024
@@ -171,8 +171,8 @@ class Executor:
                 except ValidationError as exc:
                     raise SecurityError("invalid_arguments") from exc
             # Resource checks precede approval; approval can never expand resource limits.
-            from .filesystem import check_path
-            from .network import check_url
+            from agent_harness.tools.filesystem import check_path
+            from agent_harness.tools.network import check_url
 
             for key, kind in tool.resources.items():
                 try:

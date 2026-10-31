@@ -4,9 +4,9 @@ from pathlib import Path
 import yaml
 from jsonschema import Draft202012Validator
 
-from .executor import json_copy
-from .policy import CAPABILITIES, Policy
-from .runtime import RunLimits
+from agent_harness.core.executor import json_copy
+from agent_harness.core.policy import CAPABILITIES, Policy
+from agent_harness.core.runtime import RunLimits
 
 
 def obj(properties):

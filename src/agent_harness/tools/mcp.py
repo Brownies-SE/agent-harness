@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Mapping
 
-from .errors import SecurityError
-from .executor import Tool, json_copy
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.executor import Tool, json_copy
 
 
 @dataclass(frozen=True)
@@ -59,7 +59,7 @@ class MCPAdapter:
             args = {"url": self.endpoint}
 
         def establish(**kwargs):
-            from .network import check_url
+            from agent_harness.tools.network import check_url
 
             if self._connected:
                 raise SecurityError("mcp_already_connected")

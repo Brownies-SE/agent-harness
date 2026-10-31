@@ -24,7 +24,8 @@ class ChatService:
 
     def _conversation(self, connection, conversation_id, *, lock=False):
         query = (
-            "SELECT id, title, created_at, updated_at FROM agent_chat.conversations "
+            "SELECT id, title, summary, compacted_through_message_id, memory_processed_at, "
+            "created_at, updated_at FROM agent_chat.conversations "
             "WHERE id=%s AND user_id=%s"
         )
         if lock:
@@ -41,7 +42,8 @@ class ChatService:
         with self.database.connect() as connection:
             row = connection.execute(
                 "INSERT INTO agent_chat.conversations(user_id, title) VALUES (%s, %s) "
-                "RETURNING id, title, created_at, updated_at",
+                "RETURNING id, title, summary, compacted_through_message_id, "
+                "memory_processed_at, created_at, updated_at",
                 (self.owner, request.title),
             ).fetchone()
             return Conversation.model_validate(row)
@@ -50,7 +52,8 @@ class ChatService:
         self._pagination(limit, offset)
         with self.database.connect() as connection:
             rows = connection.execute(
-                "SELECT id, title, created_at, updated_at FROM agent_chat.conversations "
+                "SELECT id, title, summary, compacted_through_message_id, memory_processed_at, "
+                "created_at, updated_at FROM agent_chat.conversations "
                 "WHERE user_id=%s ORDER BY updated_at DESC, id DESC LIMIT %s OFFSET %s",
                 (self.owner, limit, offset),
             ).fetchall()
@@ -65,7 +68,8 @@ class ChatService:
             self._conversation(connection, conversation_id, lock=True)
             row = connection.execute(
                 "UPDATE agent_chat.conversations SET title=%s, updated_at=clock_timestamp() "
-                "WHERE id=%s AND user_id=%s RETURNING id, title, created_at, updated_at",
+                "WHERE id=%s AND user_id=%s RETURNING id, title, summary, "
+                "compacted_through_message_id, memory_processed_at, created_at, updated_at",
                 (request.title, conversation_id, self.owner),
             ).fetchone()
             return Conversation.model_validate(row)

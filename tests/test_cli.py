@@ -2,10 +2,61 @@ import json
 import signal
 import sys
 
+import pytest
 from test_runtime import Decisions
 
 from agent_harness import cli
 from agent_harness.history import RunHistory
+
+
+def test_cli_without_command_prints_help_without_reading_input(monkeypatch, capsys):
+    def forbidden(*args, **kwargs):
+        pytest.fail("noninteractive CLI attempted to read input or build an agent")
+
+    monkeypatch.setattr("builtins.input", forbidden)
+    monkeypatch.setattr(cli, "build_agent", forbidden)
+    monkeypatch.setattr(sys, "argv", ["agent-harness"])
+    assert cli.main() == 0
+    assert "usage:" in capsys.readouterr().out
+
+
+def test_cli_rejects_removed_chat_command(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["agent-harness", "chat"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+
+
+def test_noninteractive_cli_never_prompts_for_tool_approval(tmp_path, monkeypatch, capsys):
+    from agent_harness.config import load_config
+    from agent_harness.core.runtime import RunLimits
+
+    path = tmp_path / "config.yaml"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    path.write_text(
+        "model: {name: test}\nfilesystem: {roots: [./workspace]}\n"
+        "permissions: {filesystem.write: ask}"
+    )
+    monkeypatch.setattr(
+        cli,
+        "LocalModel",
+        lambda *a, **kw: Decisions(
+            [
+                {"tool": "write_file", "arguments": {"path": "note.txt", "content": "forbidden"}},
+                {"final": "denied"},
+            ]
+        ),
+    )
+
+    def forbidden(details):
+        pytest.fail("CLI installed an interactive approval callback")
+
+    monkeypatch.setattr(cli, "terminal_approval", forbidden, raising=False)
+    agent = cli.build_agent(load_config(path), RunLimits(), None)
+    assert agent.run("write it") == "denied"
+    assert not (workspace / "note.txt").exists()
+    assert "Approval required" not in capsys.readouterr().err
 
 
 def config(tmp_path):

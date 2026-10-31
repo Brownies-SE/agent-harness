@@ -5,10 +5,10 @@ from typing import TypedDict
 
 from pydantic import TypeAdapter, ValidationError
 
-from .errors import SecurityError
-from .executor import json_copy
-from .models.tools import FinalAnswer, ToolRequest
-from .runtime import RunControl, RunLimits, RunStopped, check_run
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.executor import json_copy
+from agent_harness.core.runtime import RunControl, RunLimits, RunStopped, check_run
+from agent_harness.models.tools import FinalAnswer, ToolRequest
 
 SYSTEM = (
     "You propose actions; the harness enforces permissions. Respond only with JSON: "

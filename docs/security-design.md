@@ -19,6 +19,20 @@ MCP tools require trusted host capability/resource mappings. Discovery and serve
 never grant authority. Approvals satisfy ask rules only and cannot override denials or
 resource limits. Tool results and schemas remain untrusted data.
 
+The HTTP backend and CLI have no interactive approval UI or approval callback;
+tools requiring `ask` fail closed. Only a trusted library host may install a callback.
+OpenAPI declares bearer authentication, and the HTTP boundary validates its token
+before reading a request body. Internal execution/security modules live in `core/`;
+tool implementations live in `tools/`.
+
+The PostgreSQL schema includes the full requested catalog, connection, permission,
+tool-call, file and memory tables. These are storage contracts, not execution grants.
+No service automatically registers tools, changes host policy, decrypts credentials,
+replays tool calls or loads memories from those rows. MCP schemas and any future
+recalled content remain untrusted. File/memory references and compaction markers are
+scoped at the database boundary; this does not replace authorization in future routes.
+Credential-writing services must encrypt token bytes with trusted host-managed keys.
+
 Run limits, cancellation and metadata-only local history apply to LangGraph. Arbitrary
 Python/MCP handlers and DNS remain cooperative; stronger containment requires OS-level
 isolation. Third-party dependencies and inference engines are separate trust boundaries.

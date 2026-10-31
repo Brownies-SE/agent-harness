@@ -2,8 +2,8 @@
 
 from datetime import datetime, timezone
 
-from .executor import Tool
-from .models.tools import ClockResult, EmptyArguments
+from agent_harness.core.executor import Tool
+from agent_harness.models.tools import ClockResult, EmptyArguments
 
 
 def current_time_tool():

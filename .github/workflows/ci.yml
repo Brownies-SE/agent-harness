@@ -52,7 +52,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: harness_test
           POSTGRES_PASSWORD: synthetic_ci_password

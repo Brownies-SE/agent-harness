@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from uuid import uuid4
 
-from .errors import SecurityError, safe_reason
+from agent_harness.core.errors import SecurityError, safe_reason
 
 _ACTIVE = ContextVar("agent_harness_run", default=None)
 

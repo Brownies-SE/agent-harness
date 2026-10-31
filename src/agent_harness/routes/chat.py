@@ -2,6 +2,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.security import HTTPBearer
 
 from ..models.chat import (
     Conversation,
@@ -14,7 +15,7 @@ from ..models.chat import (
 )
 from ..services.chat import ChatService
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(HTTPBearer())])
 
 
 def chat_service(request: Request) -> ChatService:

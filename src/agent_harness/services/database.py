@@ -7,6 +7,8 @@ from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 from pydantic import ValidationError
 
+MIGRATIONS = ("0001_chat.sql", "0002_resources.sql")
+
 
 class ChatError(Exception):
     def __init__(self, detail, status_code=503):
@@ -64,12 +66,15 @@ class Database:
             versions = connection.execute(
                 "SELECT version FROM agent_chat.schema_migrations ORDER BY version"
             ).fetchall()
-            if versions not in ([], [{"version": 1}]):
+            applied = [row["version"] for row in versions]
+            if applied != list(range(1, len(applied) + 1)) or len(applied) > len(MIGRATIONS):
                 raise ChatError("unsupported_chat_schema")
-            if not versions:
-                migration = files("agent_harness.migrations").joinpath("0001_chat.sql")
+            for version in range(len(applied) + 1, len(MIGRATIONS) + 1):
+                migration = files("agent_harness.migrations").joinpath(MIGRATIONS[version - 1])
                 connection.execute(migration.read_text())
-                connection.execute("INSERT INTO agent_chat.schema_migrations(version) VALUES (1)")
+                connection.execute(
+                    "INSERT INTO agent_chat.schema_migrations(version) VALUES (%s)", (version,)
+                )
 
     def owner(self, email):
         with self.connect() as connection:

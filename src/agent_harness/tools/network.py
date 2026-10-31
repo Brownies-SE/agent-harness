@@ -9,9 +9,9 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from .errors import SecurityError
-from .executor import Tool
-from .runtime import check_run
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.executor import Tool
+from agent_harness.core.runtime import check_run
 
 LOCAL_NETS = tuple(
     ipaddress.ip_network(n)
@@ -160,7 +160,7 @@ def transport(target, *, method="GET", body=None, limit=256 * 1024, timeout=15):
 
 
 def http_tool(policy):
-    from .models.tools import HttpArguments, TextResult
+    from agent_harness.models.tools import HttpArguments, TextResult
 
     def http_get(url):
         return transport(check_url(policy, url)).decode("utf-8")

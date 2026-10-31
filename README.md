@@ -12,7 +12,8 @@ Model → LangGraph → Tool request → Validation → Policy → Approval → 
                                                                └── MCP tool
 ```
 
-This initial release includes a CLI, an OpenAI-compatible local inference adapter,
+This release includes a local HTTP chat backend, noninteractive administration commands,
+an OpenAI-compatible local inference adapter,
 bounded text file/directory tools, a local clock, an explicitly gated HTTP GET tool,
 a transport-neutral MCP
 adapter, and adversarial tests. It does not ship shell, Git, Docker or process-control
@@ -35,60 +36,53 @@ The example endpoint is `http://127.0.0.1:11434`; configure your actual endpoint
 No model weights are downloaded or launched by this project.
 
 ```bash
-uv run --no-sync agent-harness chat
+uv run --no-sync agent-harness run --no-history --prompt 'Hello'
 ```
 
 Use `--no-sync` after installation to avoid dependency synchronization during a run.
-The example permits reads only inside `./project`, asks before writes there, and denies
+The example permits reads only inside `./project`, marks writes as requiring approval, and denies
 all tool networking and subprocess execution. An empty `Policy()` denies every
 capability and filesystem root. CLI results and security events escape terminal controls to
-avoid terminal control injection. Audit events go to stderr; redirect them to a local
+avoid terminal control injection. There is no interactive terminal chat or approval UI.
+Running `agent-harness` without arguments prints administration command help. The
+CLI and HTTP backend deny tools requiring approval; trusted library hosts can supply
+their own approval callback. Audit events go to stderr for CLI runs; redirect them to a local
 file if persistence is needed. Prompts passed with `--prompt` can appear in your OS
 process list and shell history; avoid putting secrets in CLI arguments.
-
-## Interactive chat
-
-For a running conversation, start:
-
-```bash
-.venv/bin/agent-harness chat --config harness.local.yaml
-```
-
-Type at `You >`; replies appear in a separate, wrapped `Assistant` block. The header
-shows your configured model. Write approvals show a file and content preview rather than
-raw JSON; choose `v` to view the full content, `y` once, `a` for the same request this
-turn, or `n` to deny. Routine context trimming happens quietly.
-Use `/clear` to forget conversation context and `/exit` (or Ctrl-D) to leave. Ctrl-C
-stops a reply in progress; at the input prompt it exits. Running without a command also
-starts chat. The `run --prompt` command remains available for one-off tasks.
-
-Recent successful user/AI exchanges stay in memory: up to eight turns and an 8000-character
-serialized context budget. Older exchanges are dropped as needed; tool observations are
-not carried between turns, so the agent can read a file again for follow-up details.
-Conversation text is not saved in run history. Each turn gets fresh limits and approval
-grants; waiting for your next message does not use its deadline. Failed/cancelled turns
-are not added to chat memory, and completed tool side effects are not rolled back.
 
 ## Local chat backend
 
 The HTTP backend adds durable PostgreSQL conversations for a local UI. It uses the
 same local inference adapter, LangGraph and executor as the CLI. No Claude API or
-cloud service is used. The CLI's temporary chat context remains separate.
+cloud inference service is used. Chat conversations are served through HTTP.
 
 Code is separated into `routes/` (HTTP), `models/` (strict Pydantic contracts), and
-`services/` (storage and chat). Built-in tools have typed input/result models and
+`services/` (storage and chat), `core/` (agent execution and security), and `tools/`
+(built-in tools and the MCP adapter). Migrations live in `migrations/`; startup and
+administration entry points stay at the package root. Top-level `Executor`, `Policy`,
+`SecurityError` and `Tool` imports remain available. Built-in tools have typed input/result models and
 generated input schemas. MCP tools retain bounded JSON Schema validation; untrusted
 server schemas never choose Python types, handlers or permissions.
 
 Create dedicated local databases and a login using DBeaver or your PostgreSQL admin
 connection. The login needs ownership of these databases to apply migrations; it
-does not need superuser or role-creation privileges:
+does not need superuser or role-creation privileges after pgvector is enabled:
 
 ```sql
 CREATE ROLE agent_harness_local LOGIN PASSWORD 'choose-a-local-password';
 CREATE DATABASE agent_harness OWNER agent_harness_local;
 CREATE DATABASE agent_harness_test OWNER agent_harness_local;
 ```
+
+The PostgreSQL installation must include [pgvector](https://github.com/pgvector/pgvector#installation).
+Connect as your local PostgreSQL administrator to **each** new database and run:
+
+```sql
+CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
+```
+
+Use the dedicated application login afterwards. Do not grant it superuser privileges.
+
 
 Copy `.env.example` to `.env.local`, set the matching database password, and generate
 `HARNESS_API_TOKEN` with `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'`.
@@ -106,13 +100,19 @@ uv run --no-sync agent-harness-server --config harness.local.yaml
 ```
 
 Startup applies versioned migrations to the `agent_chat` schema. You can inspect
-`users`, `conversations`, `messages` and `schema_migrations` there in DBeaver.
+`users`, `conversations`, `messages`, `mcp_servers`, `mcp_connections`, `mcp_tools`,
+`tool_permissions`, `tool_calls`, `files`, `memories`, and migration tracking there in
+DBeaver. Migration 0002 upgrades the initial chat schema without deleting messages.
+It adds the compaction/memory markers, cache-read token column, and `VECTOR(1024)`
+embeddings. File/memory conversation references enforce owner scope; compaction
+markers must reference a message in the same conversation.
 Use `--migrate-only` to apply migrations without starting HTTP; use `--port` to
 change the default port 8000. Start your configured local inference server separately.
 The server requires `local_only: true` and `telemetry: false`.
 
 Every HTTP request requires `Authorization: Bearer <HARNESS_API_TOKEN>`, including
-health and `/openapi.json`. The server binds only `127.0.0.1`, rejects other Host
+health and `/openapi.json`. OpenAPI declares HTTP bearer security for every API
+operation, so generated clients can supply the token. The server binds only `127.0.0.1`, rejects other Host
 headers, disables proxy-header trust and access logs, and returns `Cache-Control:
 no-store`. CORS is disabled; connect the future UI through a same-origin proxy or
 add its exact local origin when integrating it. Anyone holding this token acts as
@@ -153,8 +153,14 @@ PostgreSQL intentionally stores user and assistant text, unlike metadata-only CL
 run history. API tool arguments/results and durable tool audit events are not stored
 in these chat tables. PostgreSQL administrators, host configuration and local
 processes with credentials are trusted; loopback checks are not an OS sandbox.
-Secure and back up the database yourself. This first schema does not add MCP token
-storage, files, embeddings, long-term memories or automatic compaction.
+Secure and back up the database yourself. All ten requested application tables are
+present. The additional tables provide storage contracts, not automatic feature
+activation: HTTP routes for MCP connections, file/blob operations, memory retrieval,
+compaction and tool-call persistence are not implemented. Credential fields are
+reserved for encrypted bytes; a trusted credential-writing service and host-managed
+keys must be implemented before using them. Cached MCP schemas and stored
+`tool_permissions` rows cannot authorize tools, change policy or register handlers.
+Cache-read counts currently default to zero; cache accounting is not collected.
 
 Run database/API integration tests against the separate test database:
 
@@ -229,8 +235,9 @@ paths allow intentional exceptions but never escape roots. This filename list is
 heuristic, not a secret detector: avoid mounting unrelated data or credentials at all.
 Concurrent renames by another OS process and malicious native code require OS isolation.
 
-Approvals are host-side terminal interactions: `y` once, `a` this exact request for the
-run, `n` deny. Noninteractive sessions and missing/failing approval callbacks deny.
+Approvals are trusted host callbacks returning `once`, `run`, or `deny`.
+The CLI and HTTP backend install no approval callback; tools requiring `ask` deny.
+Missing or failing callbacks also deny.
 A run approval is scoped to tool + canonical arguments + capabilities, resets between
 agent runs, and never bypasses deny rules, paths or network restrictions. One executor
 belongs to one sequential run at a time; do not share it across concurrent runs.
@@ -306,7 +313,7 @@ A client wrapping an async SDK must provide its own synchronous/lifecycle bridge
 
 ```python
 from agent_harness import Executor, Policy
-from agent_harness.mcp import MCPAdapter, MCPPermission
+from agent_harness.tools.mcp import MCPAdapter, MCPPermission
 
 # Host-approved stdio startup: default Policy() would deny before calling the factory.
 executor = Executor(Policy(rules={"subprocess": "ask"}), approve=host_approval)
@@ -375,7 +382,7 @@ counts in history are provider-reported; zero can mean no usage was reported.
 Ctrl-C or SIGTERM requests cancellation. Checks run before/after inference, before
 execution, after approvals, and before reporting completion. Built-in network I/O has
 an absolute timeout monitor, so trickling bytes cannot indefinitely extend a request.
-Approval prompts poll for cancellation/deadline expiry. Exit codes are 130 for cancellation,
+The noninteractive CLI exits with 130 for cancellation,
 124 for the run deadline, 2 for the step limit, 1 for other errors, and 0 for completion.
 
 **Limits are cooperative across arbitrary Python handlers, MCP calls, DNS resolution,

@@ -2,8 +2,9 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.responses import JSONResponse
 
-from .errors import SecurityError, safe_reason
-from .http_boundary import LocalHTTPBoundary
+from agent_harness.core.errors import SecurityError, safe_reason
+from agent_harness.routes.boundary import LocalHTTPBoundary
+
 from .models.chat import ErrorResponse
 from .routes.chat import router
 from .services.database import ChatError

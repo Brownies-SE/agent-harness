@@ -1,5 +1,9 @@
 # Local chat backend
 
+Follow-up: the user approved completing the full original ten-table schema, removing
+interactive terminal UI and organizing core/tool packages. The earlier schema
+deferral below is superseded by `../plans/2026-10-30-backend-review-fixes.md`.
+
 Build a single-owner local HTTP chat backend for a later UI. Keep the existing
 OpenAI-compatible local inference adapter and LangGraph/executor security boundary.
 The user clarified that Claude/cloud services are out of scope and requested strict

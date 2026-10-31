@@ -5,7 +5,7 @@ import secrets
 
 from starlette.responses import JSONResponse
 
-from .model import strict_json
+from agent_harness.model import strict_json
 
 MAX_BODY_BYTES = 64 * 1024
 

@@ -36,6 +36,9 @@ class SendMessage(StrictModel):
 class Conversation(StrictModel):
     id: UUID
     title: str
+    summary: str | None = None
+    compacted_through_message_id: UUID | None = None
+    memory_processed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -53,6 +56,7 @@ class Message(StrictModel):
     content: list[TextBlock] = Field(min_length=1, max_length=1)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
     created_at: datetime
 
 

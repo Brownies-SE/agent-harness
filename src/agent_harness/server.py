@@ -5,15 +5,16 @@ import os
 
 import uvicorn
 
-from .agents import LangGraphAgent
+from agent_harness.core.agents import LangGraphAgent
+from agent_harness.core.errors import SecurityError
+from agent_harness.core.executor import Executor
+from agent_harness.tools import builtin_tools
+
 from .api import create_app, validate_token
 from .config import load_config
-from .errors import SecurityError
-from .executor import Executor
 from .model import LocalModel
 from .services.chat import ChatService
 from .services.database import ChatError, Database
-from .tools import builtin_tools
 
 
 def build_service(config, database):

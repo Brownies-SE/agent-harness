@@ -3,11 +3,11 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from agent_harness.agents import LangGraphAgent
 from agent_harness.api import create_app
-from agent_harness.executor import Executor
+from agent_harness.core.agents import LangGraphAgent
+from agent_harness.core.executor import Executor
+from agent_harness.core.policy import Policy
 from agent_harness.models.chat import ConversationCreate
-from agent_harness.policy import Policy
 from agent_harness.services.chat import ChatService
 from agent_harness.services.database import ChatError
 from agent_harness.tools import builtin_tools
@@ -40,7 +40,15 @@ def test_api_chat_lifecycle_and_response_contract(api):
     response = client.post("/api/conversations", json={"title": "Local chat"})
     assert response.status_code == 201
     conversation = response.json()
-    assert set(conversation) == {"id", "title", "created_at", "updated_at"}
+    assert set(conversation) == {
+        "id",
+        "title",
+        "summary",
+        "compacted_through_message_id",
+        "memory_processed_at",
+        "created_at",
+        "updated_at",
+    }
     path = "/api/conversations/" + conversation["id"]
     reply = client.post(path + "/messages", json={"content": "hello"})
     assert reply.status_code == 200
@@ -54,6 +62,16 @@ def test_api_chat_lifecycle_and_response_contract(api):
     assert client.get(path).headers["cache-control"] == "no-store"
     assert client.delete(path).status_code == 204
     assert client.get(path).status_code == 404
+
+
+def test_openapi_declares_required_bearer_authentication(api):
+    client, _ = api
+    schema = client.get("/openapi.json").json()
+    schemes = schema.get("components", {}).get("securitySchemes", {})
+    assert schemes.get("HTTPBearer") == {"type": "http", "scheme": "bearer"}
+    for path, methods in schema["paths"].items():
+        for operation in methods.values():
+            assert operation["security"] == [{"HTTPBearer": []}], path
 
 
 @pytest.mark.parametrize(
@@ -173,7 +191,7 @@ def test_server_rejects_missing_or_weak_token(chat_database):
 
 def test_server_rejects_cloud_configuration_before_using_database(tmp_path):
     from agent_harness.config import load_config
-    from agent_harness.errors import SecurityError
+    from agent_harness.core.errors import SecurityError
     from agent_harness.server import build_service
 
     path = tmp_path / "config.yaml"
