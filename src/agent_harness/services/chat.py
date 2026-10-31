@@ -160,8 +160,8 @@ class ChatService:
         with self.database.connect() as connection:
             self._conversation(connection, conversation_id, lock=True)
             connection.execute(
-                "UPDATE agent_chat.conversations SET deleted_at=clock_timestamp(), "
-                "updated_at=clock_timestamp() WHERE id=%s AND user_id=%s",
+                "UPDATE agent_chat.conversations SET deleted_at=statement_timestamp(), "
+                "updated_at=statement_timestamp() WHERE id=%s AND user_id=%s",
                 (conversation_id, self.owner),
             )
 

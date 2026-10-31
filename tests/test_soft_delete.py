@@ -34,7 +34,7 @@ def test_soft_delete_preserves_history_and_rejects_chat_actions(chat_database):
             (conversation.id,),
         ).fetchone()
         assert row is not None and row["deleted_at"] is not None
-        assert row["updated_at"] >= row["deleted_at"]
+        assert row["updated_at"] == row["deleted_at"]
         assert (
             db.execute(
                 "SELECT count(*) AS n FROM agent_chat.messages WHERE conversation_id=%s",
