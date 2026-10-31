@@ -5,6 +5,13 @@ from pathlib import Path
 
 from .errors import SecurityError
 from .executor import Tool
+from .models.tools import (
+    DirectoryResult,
+    PathArguments,
+    TextResult,
+    WriteFileArguments,
+    WriteFileResult,
+)
 from .runtime import check_run
 
 SENSITIVE_PARTS = {
@@ -178,22 +185,27 @@ def filesystem_tools(policy):
                 os.close(descriptor)
         return {"entries": sorted(entries, key=lambda item: item["name"]), "truncated": truncated}
 
-    props = {"path": {"type": "string", "minLength": 1, "maxLength": 4096}}
-    read_schema = {
-        "type": "object",
-        "properties": props,
-        "required": ["path"],
-        "additionalProperties": False,
-    }
-    write_schema = {
-        "type": "object",
-        "properties": {**props, "content": {"type": "string"}},
-        "required": ["path", "content"],
-        "additionalProperties": False,
-    }
+    read_schema = PathArguments.model_json_schema()
+    write_schema = WriteFileArguments.model_json_schema()
     return [
-        Tool("read_file", read_schema, ("filesystem.read",), read_file, {"path": "path"}),
-        Tool("write_file", write_schema, ("filesystem.write",), write_file, {"path": "path"}),
+        Tool(
+            "read_file",
+            read_schema,
+            ("filesystem.read",),
+            read_file,
+            {"path": "path"},
+            PathArguments,
+            TextResult,
+        ),
+        Tool(
+            "write_file",
+            write_schema,
+            ("filesystem.write",),
+            write_file,
+            {"path": "path"},
+            WriteFileArguments,
+            WriteFileResult,
+        ),
         Tool(
             "list_directory",
             {
@@ -204,5 +216,7 @@ def filesystem_tools(policy):
             ("filesystem.read",),
             list_directory,
             {"path": "directory"},
+            PathArguments,
+            DirectoryResult,
         ),
     ]

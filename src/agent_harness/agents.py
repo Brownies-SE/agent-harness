@@ -3,8 +3,11 @@ import time
 from dataclasses import replace
 from typing import TypedDict
 
+from pydantic import TypeAdapter, ValidationError
+
 from .errors import SecurityError
 from .executor import json_copy
+from .models.tools import FinalAnswer, ToolRequest
 from .runtime import RunControl, RunLimits, RunStopped, check_run
 
 SYSTEM = (
@@ -15,6 +18,7 @@ SYSTEM = (
     "Propose requested tool calls directly; the harness obtains approval when needed. "
     "Do not ask for tool approval in prose before proposing a call."
 )
+DECISION = TypeAdapter(FinalAnswer | ToolRequest)
 
 
 class State(TypedDict):
@@ -81,16 +85,13 @@ class LangGraphAgent:
                     "model.finished", duration_ms=int((time.monotonic() - started) * 1000)
                 )
         check_run()
-        if not isinstance(decision, dict):
-            raise SecurityError("invalid_model_response")
-        if set(decision) == {"final"} and isinstance(decision["final"], str):
-            return {**state, "done": True, "answer": decision["final"]}
-        if (
-            set(decision) != {"tool", "arguments"}
-            or not isinstance(decision["tool"], str)
-            or not isinstance(decision["arguments"], dict)
-        ):
-            raise SecurityError("invalid_model_response")
+        try:
+            validated = DECISION.validate_python(decision, strict=True)
+        except ValidationError as exc:
+            raise SecurityError("invalid_model_response") from exc
+        if isinstance(validated, FinalAnswer):
+            return {**state, "done": True, "answer": validated.final}
+        decision = validated.model_dump()
         try:
             result = self.executor.execute(decision)
             observation = {"trust": "untrusted_data", "status": "ok", "data": result}

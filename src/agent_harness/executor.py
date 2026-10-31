@@ -8,9 +8,11 @@ from typing import Callable, Mapping
 from uuid import uuid4
 
 from jsonschema import Draft202012Validator
+from pydantic import BaseModel, ValidationError
 from referencing import Registry
 
 from .errors import SecurityError
+from .models.tools import ToolRequest
 from .policy import Policy
 from .runtime import RunStopped, check_run, current_run
 from .schema import validate_schema
@@ -26,6 +28,8 @@ class Tool:
     capabilities: tuple[str, ...]
     handler: Callable
     resources: Mapping[str, str] = field(default_factory=dict)
+    input_model: type[BaseModel] | None = None
+    output_model: type[BaseModel] | None = None
 
 
 def json_copy(value, limit=MAX_REQUEST_BYTES):
@@ -71,6 +75,11 @@ class Executor:
             raise SecurityError("audit_unavailable") from exc
 
     def register(self, tool: Tool):
+        for model in (tool.input_model, tool.output_model):
+            if model is not None and (
+                not isinstance(model, type) or not issubclass(model, BaseModel)
+            ):
+                raise ValueError("tool models must be host-supplied Pydantic models")
         if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_.-]{0,95}", tool.name):
             raise ValueError("invalid tool name")
         if tool.name in self._tools:
@@ -89,7 +98,13 @@ class Executor:
         if "network" in tool.capabilities and "url" not in resources.values():
             raise ValueError("network tools require a URL mapping")
         self._tools[tool.name] = Tool(
-            tool.name, schema, tuple(tool.capabilities), tool.handler, resources
+            tool.name,
+            schema,
+            tuple(tool.capabilities),
+            tool.handler,
+            resources,
+            tool.input_model,
+            tool.output_model,
         )
 
     def register_many(self, tools):
@@ -138,10 +153,10 @@ class Executor:
         name = "<unknown>"
         try:
             request = json_copy(request)
-            if not isinstance(request, dict) or set(request) != {"tool", "arguments"}:
-                raise SecurityError("invalid_request")
-            if not isinstance(request["tool"], str) or not isinstance(request["arguments"], dict):
-                raise SecurityError("invalid_request")
+            try:
+                request = ToolRequest.model_validate(request).model_dump()
+            except ValidationError as exc:
+                raise SecurityError("invalid_request") from exc
             tool = self._tools.get(request["tool"])
             if tool is None:
                 raise SecurityError("unknown_tool")
@@ -150,6 +165,11 @@ class Executor:
             validator = Draft202012Validator(tool.schema, registry=Registry())
             if not validator.is_valid(args):
                 raise SecurityError("invalid_arguments")
+            if tool.input_model is not None:
+                try:
+                    tool.input_model.model_validate(args, strict=True)
+                except ValidationError as exc:
+                    raise SecurityError("invalid_arguments") from exc
             # Resource checks precede approval; approval can never expand resource limits.
             from .filesystem import check_path
             from .network import check_url
@@ -202,7 +222,10 @@ class Executor:
             self.event("security.tool_allowed", name, request_id=request_id)
             check_run()
             try:
-                return json_copy(tool.handler(**args), MAX_RESULT_BYTES)
+                result = json_copy(tool.handler(**args), MAX_RESULT_BYTES)
+                if tool.output_model is not None:
+                    tool.output_model.model_validate(result, strict=True)
+                return result
             except SecurityError:
                 raise
             except Exception as exc:

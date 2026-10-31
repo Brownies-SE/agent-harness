@@ -69,6 +69,104 @@ Conversation text is not saved in run history. Each turn gets fresh limits and a
 grants; waiting for your next message does not use its deadline. Failed/cancelled turns
 are not added to chat memory, and completed tool side effects are not rolled back.
 
+## Local chat backend
+
+The HTTP backend adds durable PostgreSQL conversations for a local UI. It uses the
+same local inference adapter, LangGraph and executor as the CLI. No Claude API or
+cloud service is used. The CLI's temporary chat context remains separate.
+
+Code is separated into `routes/` (HTTP), `models/` (strict Pydantic contracts), and
+`services/` (storage and chat). Built-in tools have typed input/result models and
+generated input schemas. MCP tools retain bounded JSON Schema validation; untrusted
+server schemas never choose Python types, handlers or permissions.
+
+Create dedicated local databases and a login using DBeaver or your PostgreSQL admin
+connection. The login needs ownership of these databases to apply migrations; it
+does not need superuser or role-creation privileges:
+
+```sql
+CREATE ROLE agent_harness_local LOGIN PASSWORD 'choose-a-local-password';
+CREATE DATABASE agent_harness OWNER agent_harness_local;
+CREATE DATABASE agent_harness_test OWNER agent_harness_local;
+```
+
+Copy `.env.example` to `.env.local`, set the matching database password, and generate
+`HARNESS_API_TOKEN` with `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'`.
+Environment files are ignored by Git; keep `.env.local` private (`chmod 600 .env.local`).
+The database URL requires an explicit `127.0.0.1` or `::1` host, database, username
+and password. Service files, extra connection parameters and hostname resolution
+are rejected. Unset `PGSERVICE` if you use it for another project.
+
+```bash
+uv sync --locked --extra dev
+set -a
+source .env.local
+set +a
+uv run --no-sync agent-harness-server --config harness.local.yaml
+```
+
+Startup applies versioned migrations to the `agent_chat` schema. You can inspect
+`users`, `conversations`, `messages` and `schema_migrations` there in DBeaver.
+Use `--migrate-only` to apply migrations without starting HTTP; use `--port` to
+change the default port 8000. Start your configured local inference server separately.
+The server requires `local_only: true` and `telemetry: false`.
+
+Every HTTP request requires `Authorization: Bearer <HARNESS_API_TOKEN>`, including
+health and `/openapi.json`. The server binds only `127.0.0.1`, rejects other Host
+headers, disables proxy-header trust and access logs, and returns `Cache-Control:
+no-store`. CORS is disabled; connect the future UI through a same-origin proxy or
+add its exact local origin when integrating it. Anyone holding this token acts as
+the single local owner; this is not multi-user authentication.
+
+| Method | Route | Body / result |
+| --- | --- | --- |
+| GET | `/api/health` | Database availability and configured model name; does not probe inference. |
+| POST | `/api/conversations` | `{"title":"My chat"}` or `{}`; returns conversation, HTTP 201. |
+| GET | `/api/conversations` | Conversation list; `limit` 1–100 (default 50), `offset` ≥ 0. |
+| GET | `/api/conversations/{id}` | Conversation metadata. |
+| PATCH | `/api/conversations/{id}` | `{"title":"Renamed"}`. |
+| DELETE | `/api/conversations/{id}` | Deletes the conversation and messages; HTTP 204. |
+| GET | `/api/conversations/{id}/messages` | Messages by ascending `seq`; `after_seq` ≥ 0, `limit` 1–100. |
+| POST | `/api/conversations/{id}/messages` | `{"content":"Hello"}`; returns `user`, `assistant`, `run_id`. |
+
+Chat message content is a JSONB array of text blocks,
+`[{"type":"text","text":"Hello"}]`. Send only the new message, not client-supplied
+history or roles. Request bodies reject extra fields and type coercion, accept up
+to 8000 characters per message / 200 per title, and have a 64 KiB byte limit.
+Validation errors use a fixed `detail` code without echoing request content.
+
+Each successful exchange is committed atomically. Model or storage failures roll
+back both messages; a concurrent send, rename or delete on that conversation returns
+HTTP 409. Reopening a conversation loads its saved history; inference receives at
+most eight recent exchanges within an 8000-character serialized context budget.
+Older messages stay in the database. Usage counts are provider-reported per turn.
+
+All tool calls still pass through `Executor.execute`. The HTTP backend does not
+implement approval callbacks yet, so tools requiring `ask` are denied. It cannot
+accept policy, model, handler or owner overrides from HTTP or saved messages.
+There is no streaming, cancellation endpoint, automatic retry, or interrupted-run
+resumption. A disconnected client can leave its bounded turn running. Completed
+tool side effects cannot be undone by transaction rollback: inspect history before
+retrying a request whose result was lost.
+
+PostgreSQL intentionally stores user and assistant text, unlike metadata-only CLI
+run history. API tool arguments/results and durable tool audit events are not stored
+in these chat tables. PostgreSQL administrators, host configuration and local
+processes with credentials are trusted; loopback checks are not an OS sandbox.
+Secure and back up the database yourself. This first schema does not add MCP token
+storage, files, embeddings, long-term memories or automatic compaction.
+
+Run database/API integration tests against the separate test database:
+
+```bash
+uv run --no-sync pytest -q
+```
+
+Set `HARNESS_TEST_DATABASE_URL` first (the environment loading above does this).
+Without it PostgreSQL tests skip; CI has a dedicated PostgreSQL job running the
+full suite with these tests enabled. Tests use unique synthetic owners and delete
+their own rows; do not point them at a production database.
+
 ## What local-only means
 
 `security.local_only: true` is the default. `security.telemetry: false` is also the default.
@@ -336,7 +434,8 @@ responses; live Ollama evaluation is explicit and never downloads models automat
 
 Run this against your configured local model to measure its task reliability. The suite
 reports failures honestly; a final answer alone does not count as task success.
-Context compaction and durable resumption are not implemented.
+Context compaction and interrupted-run resumption are not implemented. The HTTP
+backend can reopen stored chat exchanges.
 
 ## Development
 

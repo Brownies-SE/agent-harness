@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from .executor import Tool
+from .models.tools import ClockResult, EmptyArguments
 
 
 def current_time_tool():
@@ -13,11 +14,11 @@ def current_time_tool():
     return Tool(
         "get_current_time",
         {
-            "type": "object",
-            "properties": {},
-            "additionalProperties": False,
+            **EmptyArguments.model_json_schema(),
             "description": "Get current system time in UTC and local ISO8601 timestamps.",
         },
         (),
         get_current_time,
+        input_model=EmptyArguments,
+        output_model=ClockResult,
     )

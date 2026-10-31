@@ -160,13 +160,17 @@ def transport(target, *, method="GET", body=None, limit=256 * 1024, timeout=15):
 
 
 def http_tool(policy):
+    from .models.tools import HttpArguments, TextResult
+
     def http_get(url):
         return transport(check_url(policy, url)).decode("utf-8")
 
-    schema = {
-        "type": "object",
-        "properties": {"url": {"type": "string"}},
-        "required": ["url"],
-        "additionalProperties": False,
-    }
-    return Tool("http_get", schema, ("network",), http_get, {"url": "url"})
+    return Tool(
+        "http_get",
+        HttpArguments.model_json_schema(),
+        ("network",),
+        http_get,
+        {"url": "url"},
+        HttpArguments,
+        TextResult,
+    )
