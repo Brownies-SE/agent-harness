@@ -43,6 +43,7 @@ class LangGraphAgent:
             history.check_roots(executor.policy.roots)
         self.on_event = on_event
         self.last_run = None
+        self.on_text = None
         self._context = []
         self._observations = []
 
@@ -88,11 +89,12 @@ class LangGraphAgent:
         if control is not None:
             control.model_started()
         try:
-            decision = json_copy(
-                self.model.decide(
-                    json_copy(state["messages"], 1024 * 1024), self.executor.descriptions()
-                )
-            )
+            messages = json_copy(state["messages"], 1024 * 1024)
+            tools = self.executor.descriptions()
+            if self.on_text is not None:
+                decision = json_copy(self.model.decide_stream(messages, tools, self.on_text))
+            else:
+                decision = json_copy(self.model.decide(messages, tools))
         finally:
             if control is not None:
                 control.record(

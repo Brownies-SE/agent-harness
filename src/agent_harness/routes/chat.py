@@ -3,6 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.security import HTTPBearer
+from starlette.responses import StreamingResponse
 
 from ..models.chat import (
     Conversation,
@@ -16,9 +17,11 @@ from ..models.chat import (
     Message,
     ReplyRating,
     SendMessage,
+    StreamEvent,
     VariantSelection,
 )
 from ..services.chat import ChatService
+from ..services.streaming import prepare_stream
 
 router = APIRouter(prefix="/api", tags=["Chat"], dependencies=[Depends(HTTPBearer())])
 
@@ -76,9 +79,15 @@ def delete_conversation(conversation_id: UUID, service: Service):
 
 @router.get("/conversations/{conversation_id}/messages", response_model=list[Message])
 def list_messages(
-    conversation_id: UUID, service: Service, after_seq: Offset = 0, limit: Limit = 100
+    conversation_id: UUID,
+    service: Service,
+    after_seq: Offset = 0,
+    limit: Limit = 100,
+    settled: Annotated[int, Query(ge=0, le=1)] = 0,
 ):
-    return service.messages(conversation_id, after_seq=after_seq, limit=limit)
+    return service.messages(
+        conversation_id, after_seq=after_seq, limit=limit, settled=bool(settled)
+    )
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=Exchange)
@@ -105,3 +114,43 @@ def regenerate_reply(conversation_id: UUID, message_id: UUID, service: Service):
 )
 def select_reply(conversation_id: UUID, message_id: UUID, body: VariantSelection, service: Service):
     return service.select_variant(conversation_id, message_id, body.variant_id)
+
+
+class EventStreamResponse(StreamingResponse):
+    media_type = "text/event-stream"
+
+    def __init__(self, stream):
+        self.stream = stream
+        super().__init__(
+            stream.iterate(),
+            headers={
+                "X-Accel-Buffering": "no",
+                "Cache-Control": "no-store",
+            },
+        )
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self.stream.close()
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/stream",
+    response_class=EventStreamResponse,
+    status_code=200,
+    responses={
+        200: {
+            "model": StreamEvent,
+            "content": {"text/event-stream": {"schema": {"type": "object"}}},
+            "description": (
+                "SSE data frames: provisional delta, committed complete, or sanitized error. "
+                "No automatic replay. Disconnect cancels the unfinished turn."
+            ),
+        }
+    },
+)
+def stream_message(conversation_id: UUID, body: SendMessage, service: Service):
+    stream = prepare_stream(service, conversation_id, body)
+    return EventStreamResponse(stream)

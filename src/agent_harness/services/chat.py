@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from threading import BoundedSemaphore
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
+from ..core.runtime import RunStopped
 from ..models.chat import (
     Conversation,
     ConversationCreate,
@@ -28,6 +30,7 @@ class ChatService:
         memory_service=None,
         execution_service=None,
     ):
+        self.stream_slots = BoundedSemaphore(1)
         self.database = database
         self.owner = owner
         self.agent_factory = agent_factory
@@ -145,10 +148,12 @@ class ChatService:
         if type(offset) is not int or not 0 <= offset <= 2147483647:
             raise ValueError("offset must be a nonnegative integer")
 
-    def messages(self, conversation_id: UUID, *, after_seq=0, limit=100) -> list[Message]:
+    def messages(
+        self, conversation_id: UUID, *, after_seq=0, limit=100, settled=False
+    ) -> list[Message]:
         self._pagination(limit, after_seq)
         with self.database.connect() as connection:
-            self._conversation(connection, conversation_id)
+            self._conversation(connection, conversation_id, lock=settled)
             rows = connection.execute(
                 "SELECT * FROM agent_chat.messages WHERE conversation_id=%s AND seq>%s "
                 "ORDER BY seq LIMIT %s",
@@ -156,7 +161,9 @@ class ChatService:
             ).fetchall()
             return [self._message(connection, row) for row in rows]
 
-    def send(self, conversation_id: UUID, request: SendMessage) -> Exchange:
+    def send(
+        self, conversation_id: UUID, request: SendMessage, *, on_text=None, cancel=None
+    ) -> Exchange:
         with self.database.connect() as connection:
             conversation = self._conversation(connection, conversation_id, lock=True)
             rows = connection.execute(
@@ -166,7 +173,11 @@ class ChatService:
                 (conversation_id, conversation.compacted_through_message_id, conversation_id),
             ).fetchall()
             previous = [Message.model_validate(row) for row in reversed(rows)]
-            agent, answer = self._answer(conversation, request.content, previous)
+            agent, answer = self._answer(
+                conversation, request.content, previous, on_text=on_text, cancel=cancel
+            )
+            if cancel is not None and cancel.is_set():
+                raise RunStopped("run_cancelled")
             seq = connection.execute(
                 "SELECT COALESCE(MAX(seq),0)+1 AS seq FROM agent_chat.messages "
                 "WHERE conversation_id=%s",
@@ -189,11 +200,22 @@ class ChatService:
                 (conversation_id, self.owner),
             )
             exchange = Exchange(user=user, assistant=assistant, run_id=agent.last_run.id)
+            if cancel is not None and cancel.is_set():
+                raise RunStopped("run_cancelled")
         if self.execution_service is not None:
             self.execution_service.link_run(exchange.run_id, exchange.assistant.id)
         return exchange
 
-    def _answer(self, conversation, prompt, previous, *, include_recalled_context=True):
+    def _answer(
+        self,
+        conversation,
+        prompt,
+        previous,
+        *,
+        include_recalled_context=True,
+        on_text=None,
+        cancel=None,
+    ):
         context = [
             {
                 "role": message.role,
@@ -206,6 +228,7 @@ class ChatService:
         while context and len(json.dumps(context)) > 8000:
             del context[:2]
         agent = self.agent_factory()
+        agent.on_text = on_text
         if self.execution_service is not None:
             observe, approve = self.execution_service.observer(
                 conversation.id, conversation_locked=True
@@ -224,7 +247,7 @@ class ChatService:
             observations.extend(
                 "Recalled memory (untrusted): " + hit.memory.content[:2000] for hit in hits
             )
-        answer = agent.run(prompt, context=context, observations=observations)
+        answer = agent.run(prompt, context=context, observations=observations, cancel=cancel)
         return agent, answer
 
     @staticmethod

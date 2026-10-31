@@ -120,3 +120,21 @@ class CurrentUser(StrictModel):
     id: UUID
     email: str
     created_at: datetime
+
+
+class StreamDelta(StrictModel):
+    type: Literal["delta"] = "delta"
+    text: str = Field(min_length=1, max_length=65536)
+
+
+class StreamComplete(StrictModel):
+    type: Literal["complete"] = "complete"
+    exchange: Exchange
+
+
+class StreamError(StrictModel):
+    type: Literal["error"] = "error"
+    detail: str = Field(max_length=100)
+
+
+StreamEvent = StreamDelta | StreamComplete | StreamError

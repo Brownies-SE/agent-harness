@@ -164,9 +164,10 @@ account setup; protect it alongside database and host configuration.
 | GET | `/api/conversations` | Conversation list; `limit` 1–100 (default 50), `offset` ≥ 0. |
 | GET | `/api/conversations/{id}` | Conversation metadata. |
 | PATCH | `/api/conversations/{id}` | `{"title":"Renamed"}`. |
-| DELETE | `/api/conversations/{id}` | Deletes the conversation and messages; HTTP 204. |
+| DELETE | `/api/conversations/{id}` | Soft deletes the conversation; retains messages and audit; HTTP 204. |
 | GET | `/api/conversations/{id}/messages` | Messages by ascending `seq`; `after_seq` ≥ 0, `limit` 1–100. |
 | POST | `/api/conversations/{id}/messages` | `{"content":"Hello"}`; returns `user`, `assistant`, `run_id`. |
+| POST | `/api/conversations/{id}/messages/stream` | Same request; authenticated SSE answer deltas followed by a committed exchange or a sanitized error. |
 
 Assistant replies support persistent feedback and alternatives:
 
@@ -197,6 +198,28 @@ back both messages; a concurrent send, rename or delete on that conversation ret
 HTTP 409. Reopening a conversation loads its saved history; inference receives at
 most eight recent exchanges within an 8000-character serialized context budget.
 Older messages stay in the database. Usage counts are provider-reported per turn.
+
+Streaming uses POST and the same authentication, strict request models, owner checks,
+conversation lock, LangGraph validation and Executor as normal chat. `text/event-stream`
+frames contain JSON in `data:`: `{"type":"delta","text":"..."}`, then
+`{"type":"complete","exchange":{...}}` after storage commits, or
+`{"type":"error","detail":"fixed_reason"}`. Heartbeats are SSE comments. Swagger
+and ReDoc include the typed event schemas. Raw tool proposals/results, provider reasoning fields and connection credentials
+are not forwarded as stream events. Answer text may quote data a model has seen. Display deltas are
+provisional untrusted text; malformed or interrupted model decisions are not saved.
+
+One stream may generate at a time per local service; another stream returns HTTP 409.
+The queue holds at most 32 typed events with a five-second backpressure deadline.
+Provider input is capped at 1 MiB, its accumulated decision at 256 KiB, and an SSE
+provider event at 128 KiB. Use `GET /api/conversations/{id}/messages?settled=1`
+to read a settled snapshot: HTTP 409 means the generation transaction still holds
+the conversation lock; a successful read follows its commit or rollback. Existing run/step/token/time limits still apply. Streaming
+uses the checked, pinned network transport with no redirects or proxies. Disconnect
+cancels the run and interrupts its inference socket; an unfinished exchange rolls
+back. The stream has no resume/replay behavior. A completion may commit just before
+Stop/disconnect; reload saved history to resolve that race. Completed tool side
+effects survive cancellation or rollback. Other in-process handlers stop cooperatively,
+not through forced termination. Regeneration currently retains its normal JSON endpoint.
 
 Deleting a conversation soft deletes it: its deletion and update timestamps are set,
 and its messages, saved variants and tool audit remain in PostgreSQL. Deleted chats
@@ -289,8 +312,9 @@ hosts can still provide separately reviewed clients to `MCPAdapter`. It does not
 launch arbitrary commands or invent missing integration credentials. Streamable HTTP
 JSON and event-stream responses are supported with bounded parsing and session checks.
 
-There is no token streaming, cancellation endpoint, automatic action retry or
-interrupted-run resumption. A disconnected client can leave its bounded turn running.
+There is no separate cancellation endpoint, automatic action retry or interrupted-run
+resumption. Normal JSON requests can leave a bounded turn running after disconnect;
+streaming requests propagate disconnect cancellation.
 Completed tool side effects cannot be undone by database rollback: inspect tool-call
 history before retrying a request whose result was lost. PostgreSQL intentionally
 stores text, memories and tool arguments/results. Database administrators, host

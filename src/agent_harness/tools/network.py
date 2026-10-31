@@ -92,6 +92,7 @@ def transport(
     headers=None,
     response_headers=None,
     stop_when=None,
+    on_chunk=None,
 ):
     """Connect to the checked IP once; no proxies, redirects or second DNS lookup."""
     request_headers = {"Content-Type": "application/json", "Connection": "close"}
@@ -174,17 +175,24 @@ def transport(
             response_headers["__status_code__"] = str(response.status)
         if not 200 <= response.status < 300:
             raise SecurityError("http_status_denied")
-        if stop_when is None:
+        if stop_when is None and on_chunk is None:
             data = response.read(limit + 1)
         else:
             chunks = bytearray()
-            while len(chunks) <= limit:
-                chunk = response.read1(min(4096, limit + 1 - len(chunks)))
+            total = 0
+            while total <= limit:
+                chunk = response.read1(min(4096, limit + 1 - total))
                 if not chunk:
                     break
-                chunks.extend(chunk)
+                total += len(chunk)
+                if total > limit:
+                    raise SecurityError("response_too_large")
                 check_run()
-                if stop_when(bytes(chunks)):
+                if on_chunk is not None:
+                    on_chunk(chunk)
+                else:
+                    chunks.extend(chunk)
+                if stop_when is not None and stop_when(bytes(chunks)):
                     break
             data = bytes(chunks)
         if len(data) > limit:

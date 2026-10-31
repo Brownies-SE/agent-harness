@@ -34,6 +34,12 @@ class LocalModel:
         check_url(policy, self.url, inference=True)
 
     def decide(self, messages, tools):
+        return self._decide(messages, tools)
+
+    def decide_stream(self, messages, tools, on_text):
+        return self._decide(messages, tools, on_text=on_text)
+
+    def _decide(self, messages, tools, *, on_text=None):
         # Recheck every call, then connect using only this checked/pinned result.
         control = check_run()
         target = check_url(self.policy, self.url, inference=True)
@@ -61,7 +67,8 @@ class LocalModel:
                 {
                     "model": self.model,
                     "messages": wire_messages,
-                    "stream": False,
+                    "stream": on_text is not None,
+                    **({"stream_options": {"include_usage": True}} if on_text else {}),
                     "temperature": 0,
                     "response_format": {"type": "json_object"},
                     "max_tokens": control.limits.max_output_tokens
@@ -72,6 +79,27 @@ class LocalModel:
             )
         ).encode()
         try:
+            if on_text is not None:
+                from agent_harness.model_streaming import ModelStream
+
+                stream = ModelStream(on_text, control)
+                headers = {}
+
+                def receive(chunk):
+                    if headers.get("content-type", "").split(";")[0] != "text/event-stream":
+                        raise SecurityError("invalid_model_response")
+                    stream.feed(chunk)
+
+                transport(
+                    target,
+                    method="POST",
+                    body=body,
+                    timeout=60,
+                    limit=1024 * 1024,
+                    response_headers=headers,
+                    on_chunk=receive,
+                )
+                return stream.finish()
             response = strict_json(transport(target, method="POST", body=body, timeout=60))
             if not isinstance(response, dict):
                 raise ValueError("provider response must be an object")
