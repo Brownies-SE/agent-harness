@@ -145,7 +145,8 @@ class EventStreamResponse(StreamingResponse):
             "model": StreamEvent,
             "content": {"text/event-stream": {"schema": {"type": "object"}}},
             "description": (
-                "SSE data frames: provisional delta, committed complete, or sanitized error. "
+                "SSE data frames: ordered provisional text delta/chart, "
+                "committed complete, or sanitized error. "
                 "No automatic replay. Disconnect cancels the unfinished turn."
             ),
         }

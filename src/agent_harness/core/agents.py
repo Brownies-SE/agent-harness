@@ -8,6 +8,7 @@ from pydantic import TypeAdapter, ValidationError
 from agent_harness.core.errors import SecurityError
 from agent_harness.core.executor import json_copy
 from agent_harness.core.runtime import RunControl, RunLimits, RunStopped, check_run
+from agent_harness.models.charts import ChartResult
 from agent_harness.models.tools import FinalAnswer, ToolRequest
 
 SYSTEM = (
@@ -52,6 +53,16 @@ class LangGraphAgent:
             raise SecurityError("invalid_prompt")
         self.executor.start_run()
         system = SYSTEM
+        chart = self.executor._tools.get("chart_tool")
+        if chart is not None and chart.output_model is ChartResult:
+            system += (
+                " To create a chart or diagram, call chart_tool. Its returned reference is "
+                "display data: copy that exact [[chart:...]] string into your final answer "
+                "at the chart position. Usually introduce the chart briefly, insert its "
+                "reference, then explain what it shows. Follow the user's requested order. "
+                "Do not put the reference in backticks or code fences. "
+                "Use only references returned by successful calls in this run; never invent IDs."
+            )
         model_name = getattr(self.model, "model", None)
         if isinstance(model_name, str):
             system += " Your configured model identifier is " + json.dumps(model_name) + "."

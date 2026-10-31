@@ -7,7 +7,7 @@ import time
 
 from ..core.errors import SecurityError, safe_reason
 from ..core.runtime import RunStopped, check_run
-from ..models.chat import StreamComplete, StreamDelta, StreamError
+from ..models.chat import StreamChart, StreamComplete, StreamDelta, StreamError
 from .database import ChatError
 
 
@@ -41,6 +41,7 @@ class ChatStream:
                 self.conversation_id,
                 self.body,
                 on_text=lambda text: self._put(StreamDelta(text=text)),
+                on_chart=lambda chart: self._put(StreamChart(chart=chart)),
                 cancel=self.cancel,
             )
             self._put(StreamComplete(exchange=exchange))

@@ -1,9 +1,10 @@
 """Local data validation only; browsers render approved chart data without executing code."""
 
 from copy import deepcopy
+from uuid import uuid4
 
 from ..core.executor import Tool
-from ..models.charts import ChartSpec
+from ..models.charts import ChartResult, ChartSpec
 
 
 def chart_tool():
@@ -15,12 +16,18 @@ def chart_tool():
         "Create an inline interactive chart or Mermaid diagram from supplied data. "
         "kind: line/bar/scatter/pie with labels and named series values; or mermaid "
         "with source only. Example: {kind:bar,labels:[A,B],series:[{name:Count,values:[1,2]}]}. "
-        "The chart is attached to your saved reply; explain it in your final answer. "
+        "The result includes chart_id and a reference string. Copy its reference into "
+        "your final answer exactly where that chart belongs, with explanation before "
+        "or after it. Copy the returned ID exactly; never invent an ID. "
         "No Python, JavaScript, HTML, links, configuration directives or external resources."
     )
 
     def create(**arguments):
-        return ChartSpec.model_validate(arguments).model_dump(mode="json")
+        spec = ChartSpec.model_validate(arguments).model_dump(mode="json")
+        chart_id = uuid4().hex
+        return ChartResult(**spec, chart_id=chart_id, reference=f"[[chart:{chart_id}]]").model_dump(
+            mode="json"
+        )
 
     return Tool(
         "chart_tool",
@@ -28,5 +35,5 @@ def chart_tool():
         (),
         create,
         input_model=ChartSpec,
-        output_model=ChartSpec,
+        output_model=ChartResult,
     )

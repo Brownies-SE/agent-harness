@@ -149,7 +149,7 @@ def test_mermaid_encoded_image_metadata_cannot_initiate_hidden_requests():
         ChartSpec(kind="mermaid", mermaid='flowchart TD\nA@{ "\\u0069mg": "/api/local-action" }')
 
 
-def test_stream_only_attaches_chart_after_committed_completion(chat_database):
+def test_stream_chart_is_provisional_until_committed_completion(chat_database):
     import json
 
     from fastapi.testclient import TestClient
@@ -181,7 +181,8 @@ def test_stream_only_attaches_chart_after_committed_completion(chat_database):
     events = [
         json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")
     ]
-    assert [event["type"] for event in events] == ["delta", "complete"]
+    assert [event["type"] for event in events] == ["delta", "chart", "complete"]
+    assert events[1]["chart"]["spec"]["kind"] == "bar"
     blocks = events[-1]["exchange"]["assistant"]["content"]
     assert blocks[1]["type"] == "chart"
     assert service.messages(conversation.id)[1].content[1].spec.kind == "bar"

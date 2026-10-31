@@ -187,8 +187,9 @@ alternative changes canonical history and clears the stale compaction summary;
 subsequent normal sends use the selected answer. Later saved turns remain in place;
 selection does not create a branching conversation tree.
 
-Chat message content is a JSONB array of text blocks,
-`[{"type":"text","text":"Hello"}]`. Send only the new message, not client-supplied
+Chat message content is an ordered JSONB array. User messages contain one text block,
+`[{"type":"text","text":"Hello"}]`; assistant replies may interleave validated text
+and chart blocks. Send only the new user text, not client-supplied
 history or roles. Request bodies reject extra fields and type coercion, accept up
 to 8000 characters per message / 200 per title, and have a 64 KiB byte limit.
 Validation errors use a fixed `detail` code without echoing request content.
@@ -201,12 +202,14 @@ Older messages stay in the database. Usage counts are provider-reported per turn
 
 Streaming uses POST and the same authentication, strict request models, owner checks,
 conversation lock, LangGraph validation and Executor as normal chat. `text/event-stream`
-frames contain JSON in `data:`: `{"type":"delta","text":"..."}`, then
+frames contain JSON in `data:`: `{"type":"delta","text":"..."}` and optional
+`{"type":"chart","chart":{"type":"chart","spec":{...}}}` in display order, then
 `{"type":"complete","exchange":{...}}` after storage commits, or
 `{"type":"error","detail":"fixed_reason"}`. Heartbeats are SSE comments. Swagger
 and ReDoc include the typed event schemas. Raw tool proposals/results, provider reasoning fields and connection credentials
-are not forwarded as stream events. Answer text may quote data a model has seen. Display deltas are
-provisional untrusted text; malformed or interrupted model decisions are not saved.
+are not forwarded as stream events. Answer text may quote data a model has seen. Text and chart events are provisional display data until completion; malformed or
+interrupted model decisions are not saved. On error/disconnect, reconcile against saved
+history rather than retaining or replaying provisional blocks.
 
 One stream may generate at a time per local service; another stream returns HTTP 409.
 The queue holds at most 32 typed events with a five-second backpressure deadline.
@@ -270,16 +273,25 @@ sources, callbacks, source CSS and external resource references. This is a data
 validation tool with no filesystem/network/subprocess capability; per-tool deny/ask
 policies still apply.
 
-Only successful authorized chart-tool results are attached by host code to the reply;
-model prose cannot manufacture an artifact block. Saved assistant JSONB content starts
-with one text block and may contain up to four `{type:"chart",spec:...}` blocks. They
-survive refresh, regeneration, ratings and version selection without a migration.
-Existing text-only messages remain compatible. Streamed charts appear in the committed
-completion event, not as partial diagrams. Conversation search and recalled text use
-the first text block. Direct approved tool-call responses return chart data; attachment
-to an assistant reply occurs when the chat agent executes the chart tool during its run.
+Only successful authorized chart-tool results can appear in a reply. Each result includes
+a host-generated `chart_id`; the model places `[[chart:<chart_id>]]` in its final string
+where that current-run chart belongs. Host code buffers split references, resolves only
+that run's approved results, and emits typed text/chart blocks. Unknown, cross-run,
+malformed, unterminated or repeated references fail closed. Marker fragments are not
+displayed. Unreferenced approved charts keep the legacy append fallback, so existing
+models and old text-then-chart history remain compatible. The reference conveys no
+permission to run another tool or access saved artifacts from other turns.
 
-Lucid renders numerical charts with local SVG, focus/hover details and series toggles.
+Saved assistant JSONB content is ordered, with at most nine blocks (four charts and
+five text blocks). A chart can appear first, between paragraphs or on its own. User
+messages remain one text block. The same order is retained by normal JSON responses,
+stream events, reloads, ratings, regeneration and version selection, without a migration.
+Search, memory, compaction and conversation context join all text blocks, including
+text after charts. Chart specs are not interpreted as instructions. Direct tool-call
+responses return data; attachment to a reply happens when its chat agent runs the tool.
+
+Lucid renders blocks as one continuous assistant response, without separate chart cards.
+Numerical charts use local SVG with focus/hover details and series toggles.
 Mermaid is bundled locally, runs with strict host-controlled configuration, and its SVG
 is sanitized before insertion with scripts, images, links, CSS and external references
 removed. Diagrams support local zoom. These application checks are not an OS sandbox

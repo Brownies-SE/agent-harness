@@ -8,7 +8,7 @@ from psycopg.types.json import Jsonb
 
 from ..core.errors import SecurityError
 from ..core.runtime import RunStopped
-from ..models.charts import ChartBlock, ChartSpec
+from ..models.charts import ChartBlock, ChartResult, ChartSpec
 from ..models.chat import (
     Conversation,
     ConversationCreate,
@@ -18,8 +18,10 @@ from ..models.chat import (
     Exchange,
     Message,
     SendMessage,
+    text_content,
 )
 from .database import ChatError, Database
+from .response_blocks import ResponseBlocks
 
 
 class ChatService:
@@ -94,9 +96,11 @@ class ChatService:
                 "c.memory_processed_at,c.created_at,c.updated_at,"
                 "hit.id AS matched_message_id,hit.seq AS matched_seq,hit.text "
                 "FROM agent_chat.conversations c LEFT JOIN LATERAL ("
-                "SELECT m.id,m.seq,m.content #>> '{0,text}' AS text "
-                "FROM agent_chat.messages m WHERE m.conversation_id=c.id "
-                "AND strpos(lower(COALESCE(m.content #>> '{0,text}','')),%s)>0 "
+                "SELECT m.id,m.seq,parts.text FROM agent_chat.messages m CROSS JOIN LATERAL ("
+                "SELECT COALESCE(string_agg(b.value->>'text',chr(10)||chr(10) ORDER BY b.ord),'') "
+                "AS text FROM jsonb_array_elements(m.content) WITH ORDINALITY AS b(value,ord) "
+                "WHERE b.value->>'type'='text') parts WHERE m.conversation_id=c.id "
+                "AND strpos(lower(parts.text),%s)>0 "
                 "ORDER BY CASE WHEN %s='' THEN -m.seq ELSE m.seq END LIMIT 1) hit ON true "
                 "WHERE c.user_id=%s AND c.deleted_at IS NULL "
                 "AND (%s='' OR strpos(lower(c.title),%s)>0 "
@@ -164,7 +168,13 @@ class ChatService:
             return [self._message(connection, row) for row in rows]
 
     def send(
-        self, conversation_id: UUID, request: SendMessage, *, on_text=None, cancel=None
+        self,
+        conversation_id: UUID,
+        request: SendMessage,
+        *,
+        on_text=None,
+        on_chart=None,
+        cancel=None,
     ) -> Exchange:
         with self.database.connect() as connection:
             conversation = self._conversation(connection, conversation_id, lock=True)
@@ -176,7 +186,12 @@ class ChatService:
             ).fetchall()
             previous = [Message.model_validate(row) for row in reversed(rows)]
             agent, answer = self._answer(
-                conversation, request.content, previous, on_text=on_text, cancel=cancel
+                conversation,
+                request.content,
+                previous,
+                on_text=on_text,
+                on_chart=on_chart,
+                cancel=cancel,
             )
             if cancel is not None and cancel.is_set():
                 raise RunStopped("run_cancelled")
@@ -195,7 +210,7 @@ class ChatService:
                 agent.last_run.input_tokens,
                 agent.last_run.output_tokens,
                 agent.last_run.cache_read_tokens,
-                charts=agent.charts,
+                blocks=agent.blocks,
             )
             connection.execute(
                 "UPDATE agent_chat.conversations SET updated_at=clock_timestamp() "
@@ -217,28 +232,30 @@ class ChatService:
         *,
         include_recalled_context=True,
         on_text=None,
+        on_chart=None,
         cancel=None,
     ):
         context = [
             {
                 "role": message.role,
-                "content": json.dumps({"final": message.content[0].text})
+                "content": json.dumps({"final": text_content(message.content)})
                 if message.role == "assistant"
-                else message.content[0].text,
+                else text_content(message.content),
             }
             for message in previous
         ]
         while context and len(json.dumps(context)) > 8000:
             del context[:2]
         agent = self.agent_factory()
-        agent.on_text = on_text
+        charts = {}
+        response = ResponseBlocks(charts, on_text=on_text, on_chart=on_chart)
+        agent.on_text = response.feed if on_text is not None else None
         if self.execution_service is not None:
             observe, approve = self.execution_service.observer(
                 conversation.id, conversation_locked=True
             )
             agent.executor._observe = observe
             agent.executor._approve = approve
-        agent.charts = []
         original_observer = agent.executor._observe
         current_tool = None
         weather_used = False
@@ -255,9 +272,13 @@ class ChatService:
                 and event["status"] == "completed"
                 and current_tool == "chart_tool"
             ):
-                if len(agent.charts) >= 4:
+                if len(charts) >= 4:
                     raise SecurityError("payload_too_large")
-                agent.charts.append(ChartBlock(spec=ChartSpec.model_validate(event["result"])))
+                result = ChartResult.model_validate(event["result"])
+                if result.chart_id in charts:
+                    raise SecurityError("invalid_model_response")
+                values = result.model_dump(exclude={"chart_id", "reference"})
+                charts[result.chart_id] = ChartBlock(spec=ChartSpec.model_validate(values))
             elif (
                 event["phase"] == "finished"
                 and event["status"] == "completed"
@@ -279,12 +300,14 @@ class ChatService:
                 "Recalled memory (untrusted): " + hit.memory.content[:2000] for hit in hits
             )
         answer = agent.run(prompt, context=context, observations=observations, cancel=cancel)
+        if not answer.startswith(response.raw):
+            raise SecurityError("invalid_model_response")
+        response.feed(answer[len(response.raw) :])
         if weather_used:
             attribution = "\n\nWeather data: [Open-Meteo](https://open-meteo.com/) (CC BY 4.0)."
-            answer += attribution
-            if on_text is not None:
-                on_text(attribution)
-        return agent, answer
+            response.feed(attribution)
+        agent.blocks = response.finish()
+        return agent, text_content(agent.blocks)
 
     @staticmethod
     def _insert(
@@ -298,11 +321,16 @@ class ChatService:
         cache_read_tokens=0,
         *,
         charts=(),
+        blocks=None,
     ):
-        blocks = [
-            {"type": "text", "text": text},
-            *(chart.model_dump(mode="json") for chart in charts),
-        ]
+        blocks = (
+            [block.model_dump(mode="json") for block in blocks]
+            if blocks is not None
+            else [
+                {"type": "text", "text": text},
+                *(chart.model_dump(mode="json") for chart in charts),
+            ]
+        )
         row = connection.execute(
             "INSERT INTO agent_chat.messages "
             "(conversation_id, seq, role, content, input_tokens, output_tokens,cache_read_tokens) "
@@ -425,7 +453,10 @@ class ChatService:
             ).fetchall()
             previous = [Message.model_validate(row) for row in reversed(rows)]
             agent, answer = self._answer(
-                conversation, user["content"][0]["text"], previous, include_recalled_context=False
+                conversation,
+                text_content(user["content"]),
+                previous,
+                include_recalled_context=False,
             )
             variant = connection.execute(
                 "INSERT INTO agent_chat.message_variants "
@@ -434,12 +465,7 @@ class ChatService:
                 "FROM agent_chat.message_variants WHERE message_id=%s RETURNING id",
                 (
                     message_id,
-                    Jsonb(
-                        [
-                            {"type": "text", "text": answer},
-                            *(chart.model_dump(mode="json") for chart in agent.charts),
-                        ]
-                    ),
+                    Jsonb([block.model_dump(mode="json") for block in agent.blocks]),
                     agent.last_run.input_tokens,
                     agent.last_run.output_tokens,
                     agent.last_run.cache_read_tokens,

@@ -100,3 +100,14 @@ class ChartSpec(StrictModel):
 class ChartBlock(StrictModel):
     type: Literal["chart"] = "chart"
     spec: ChartSpec
+
+
+class ChartResult(ChartSpec):
+    chart_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    reference: str = Field(pattern=r"^\[\[chart:[a-f0-9]{32}\]\]$")
+
+    @model_validator(mode="after")
+    def matching_reference(self):
+        if self.reference != f"[[chart:{self.chart_id}]]":
+            raise ValueError("invalid chart reference")
+        return self

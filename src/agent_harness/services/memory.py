@@ -10,7 +10,7 @@ from uuid import UUID
 from pydantic import ValidationError
 
 from ..model import strict_json
-from ..models.chat import Conversation
+from ..models.chat import Conversation, text_content
 from ..models.memory import Memory, MemoryCreate, MemoryHit, MemorySearch, MemoryUpdate, valid_text
 from .database import ChatError, Database
 from .embeddings import validate_vectors
@@ -167,7 +167,7 @@ class MemoryService:
         ).fetchall()
         if not rows:
             raise ChatError("conversation_empty", 409)
-        messages = [{"role": row["role"], "content": row["content"][0]["text"]} for row in rows]
+        messages = [{"role": row["role"], "content": text_content(row["content"])} for row in rows]
         if len(rows) > 1000 or sum(len(m["content"]) for m in messages) > 48000:
             raise ChatError("conversation_too_large", 413)
         return messages, rows[-1]["id"]
@@ -198,7 +198,9 @@ class MemoryService:
             ).fetchall()
             if not rows:
                 return []
-            messages = [{"role": row["role"], "content": row["content"][0]["text"]} for row in rows]
+            messages = [
+                {"role": row["role"], "content": text_content(row["content"])} for row in rows
+            ]
             if len(rows) > 1000 or sum(len(message["content"]) for message in messages) > 48000:
                 raise ChatError("conversation_too_large", 413)
             messages = [message for message in messages if message["content"].strip()]
