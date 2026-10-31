@@ -54,7 +54,7 @@ Files: api.py, routes/chat.py, server.py; tests/test_api.py; README.md; CI workf
       CRUD/send, error privacy, and policy bypass attempts.
 - [x] Implement thin routes, application factory, loopback server entry point.
 - [x] Verify API, database, full suite, Ruff, audit; smoke-test local inference.
-- [ ] Document setup, endpoints and limits; open PR and check CI without merging.
+- [x] Document setup, endpoints and limits; open PR and check CI without merging.
 
 ## Execution record
 
@@ -72,3 +72,6 @@ Independent whole-change review found no actionable issues and separately ran
 115 existing model/tool/security/LangGraph tests. Live local-inference smoke passed
 two API turns with persisted-context recall; synthetic smoke data was removed.
 Database/API credentials are private, ignored local configuration, not repository data.
+
+Delivery: [PR #16](https://github.com/Brownies-SE/agent-harness/pull/16) targets `dev`.
+Required CI is monitored on the final pushed revision; merging is not authorized.
