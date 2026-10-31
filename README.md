@@ -491,8 +491,69 @@ belongs to one sequential run at a time; do not share it across concurrent runs.
 | `read_file` | `path` | `filesystem.read`; UTF-8 text inside approved roots, up to 128 KiB. |
 | `write_file` | `path`, `content` | `filesystem.write`; the example policy asks before writes. Parent directories must exist. |
 | `list_directory` | `path` (use `.` for the workspace root) | `filesystem.read`; immediate allowed file/folder names and types, no recursion. |
-| `get_current_time` | none (`{}`) | Local system clock; returns matching `utc` and `local` ISO8601 timestamps. Declares no privileged capabilities. |
+| `get_current_time` | Optional `operation`, `timezone_name`, `timestamp`, `other_timestamp` | Current time, IANA zone conversion or elapsed seconds. Offset-aware timestamps required for conversion/difference. No privileged capabilities. |
+| `calculator_tool` | `expression` | Bounded arithmetic with 28-digit decimal precision; returns a decimal string. No code or functions. No privileged capabilities. |
+| `web_search` | `query`, optional `limit` (1–10), `time_range` | `web.search`; fixed loopback SearXNG endpoint, bounded snippets and links. Default denied. |
 | `http_get` | `url` | Network capability plus host/port policy; denied in the example configuration. |
+
+Clock calls with `{}` retain the existing UTC/local timestamps and add operation, zone,
+weekday and `difference_seconds` (zero unless comparing instants). `convert` requires
+`timestamp`; `difference` requires both timestamps and returns the second minus the
+first. Both accept `Z` or explicit UTC offsets; naive local times are rejected to avoid
+DST ambiguity. `timezone_name` is an IANA name such as `America/Denver`; empty uses host
+local time. Differences measure elapsed seconds, not calendar/business days.
+
+Calculator expressions support `+ - * / // % **` and parentheses. Names, function calls,
+attributes, containers, booleans and code are rejected. Limits: 512 characters, 64 AST
+nodes, 16 evaluation levels, 32 opening parentheses, integer exponents of magnitude at
+most 1000, and nonzero intermediate/results between 1e-100 and 1e100 in magnitude.
+Division is rounded to 28 significant decimal digits. `//` truncates toward zero and
+`%` follows the dividend's sign (Decimal semantics). Unsupported underflow/overflow and
+division by zero fail explicitly. This is an arithmetic calculator, not a Python runtime.
+
+### Local web search setup
+
+The search tool uses only `http://127.0.0.1:8888/search` through the existing bounded,
+cancellable transport (256 KiB, 15 seconds, no redirects/proxies). It does not fetch
+result pages. Search returns at most ten deduplicated titles, snippets and HTTP(S) links;
+local/credential-bearing/unsafe-scheme and legacy numeric loopback links are filtered.
+Link checks do not resolve DNS or grant permission to fetch a URL. Search text remains
+untrusted data. Successful chat searches append up to ten escaped source links to both
+streamed and saved replies, even if the model omits citations.
+
+The supplied SearXNG container is digest-pinned, runs without root/capabilities, has a
+read-only root filesystem, temporary cache, resource limits and a loopback-only port.
+Configure a random `HARNESS_SEARCH_SECRET` in ignored `.env.local`, then run:
+
+```sh
+set -a
+source .env.local
+set +a
+docker compose -f infra/search/compose.yaml up -d
+```
+
+Generate the secret with `python3 -c 'import secrets; print(secrets.token_hex(32))'` and
+store it only in your local environment file. To stop the service, use the same exported
+environment and `docker compose -f infra/search/compose.yaml down`. Docker must be running.
+No account/API key or extra inference model is required. The initial image is about
+250 MiB uncompressed; Docker Desktop's own VM/storage is separate.
+
+Enable `web.search: allow` under `permissions` in your trusted local harness config, then
+restart the backend. The checked-in example keeps search denied; generic `network`
+permission remains separate and denied. Existing per-tool deny/ask rules still apply;
+per-user allow cannot override a host deny. The service does not start automatically with
+the backend. Discovery/execution remain `GET /api/tools` and `POST /api/tool-calls`, also
+used by the chat agent through Executor; no parallel execution route was added.
+
+SearXNG forwards queries to its configured external engines (Brave, DuckDuckGo, Bing and
+Google). Their availability and rate limits vary; partial results are marked and total
+engine failure raises an error. Time filtering depends on engine support. Its outbound
+requests are third-party code outside the harness's in-process transport controls. The
+container configuration does not provide an outbound network allowlist or guarantee
+network silence. Do not send private data in queries. Local-only inference and telemetry
+off remain defaults; enabling web search explicitly opts into this external activity.
+See the [SearXNG API](https://docs.searxng.org/dev/search_api.html) and
+[container documentation](https://docs.searxng.org/admin/installation-docker.html).
 
 Directory listing returns `{"entries": [{"name": "README.md", "type": "file"}],
 "truncated": false}`. Results are sorted, contain at most 200 entries, and examine at most

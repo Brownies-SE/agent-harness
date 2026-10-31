@@ -1,0 +1,52 @@
+use_default_settings:
+  engines:
+    keep_only: [brave, duckduckgo, bing, google]
+general:
+  debug: false
+  instance_name: Agent Harness Search
+  enable_metrics: false
+server:
+  secret_key: supplied-via-SEARXNG_SECRET
+  limiter: false
+  image_proxy: false
+search:
+  formats: [json]
+  safe_search: 1
+  autocomplete: ''
+  favicon_resolver: ''
+  default_lang: en
+outgoing:
+  request_timeout: 8.0
+  max_request_timeout: 10.0
+engines:
+  - name: brave
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: google
+    disabled: false
+plugins:
+  searx.plugins.calculator.SXNGPlugin:
+    active: false
+  searx.plugins.infinite_scroll.SXNGPlugin:
+    active: false
+  searx.plugins.hash_plugin.SXNGPlugin:
+    active: false
+  searx.plugins.self_info.SXNGPlugin:
+    active: false
+  searx.plugins.unit_converter.SXNGPlugin:
+    active: false
+  searx.plugins.ahmia_filter.SXNGPlugin:
+    active: false
+  searx.plugins.hostnames.SXNGPlugin:
+    active: false
+  searx.plugins.time_zone.SXNGPlugin:
+    active: false
+  searx.plugins.oa_doi_rewrite.SXNGPlugin:
+    active: false
+  searx.plugins.tor_check.SXNGPlugin:
+    active: false
+  searx.plugins.tracker_url_remover.SXNGPlugin:
+    active: false

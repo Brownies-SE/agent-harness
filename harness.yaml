@@ -19,6 +19,7 @@ permissions:
   filesystem.read: allow
   filesystem.write: ask
   network: deny
+  web.search: deny  # Opt in to the local SearXNG service only.
   weather.read: deny  # Opt in to fixed Open-Meteo endpoints only.
   subprocess: deny
   process.read: deny

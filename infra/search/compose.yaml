@@ -1,0 +1,29 @@
+name: agent-harness-search
+services:
+  search:
+    image: docker.io/searxng/searxng@sha256:f4aa660c54d062dedb268be84e821ea24e39f48c7a496af8dd02cc9eedb93847
+    restart: unless-stopped
+    user: '977:977'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports: ['127.0.0.1:8888:8080']
+    environment:
+      SEARXNG_SECRET: '${HARNESS_SEARCH_SECRET:?Set HARNESS_SEARCH_SECRET in your environment}'
+      GRANIAN_HOST: '0.0.0.0'
+      GRANIAN_PORT: '8080'
+      GRANIAN_WORKERS: '1'
+      FORCE_OWNERSHIP: 'false'
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=977,gid=977
+      - /var/cache/searxng:rw,noexec,nosuid,size=32m,uid=977,gid=977
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+    logging:
+      driver: local
+      options:
+        max-size: '5m'
+        max-file: '2'

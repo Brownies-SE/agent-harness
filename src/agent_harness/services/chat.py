@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from threading import BoundedSemaphore
+from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
@@ -22,6 +23,7 @@ from ..models.chat import (
     TextBlock,
     text_content,
 )
+from ..models.web_search import SearchResult
 from .database import ChatError, Database
 from .response_blocks import ResponseBlocks
 from .visual_wording import neutral_visual_text
@@ -326,6 +328,7 @@ class ChatService:
         original_observer = agent.executor._observe
         current_tool = None
         weather_used = False
+        search_sources = {}
 
         def capture(event):
             nonlocal current_tool, weather_used
@@ -352,6 +355,15 @@ class ChatService:
                 and current_tool == "weather_tool"
             ):
                 weather_used = True
+            elif (
+                event["phase"] == "finished"
+                and event["status"] == "completed"
+                and current_tool == "web_search"
+            ):
+                result = SearchResult.model_validate(event["result"])
+                for hit in result.results:
+                    if len(search_sources) < 10:
+                        search_sources.setdefault(hit.url, hit.title)
 
         agent.executor._observe = capture
         observations = []
@@ -373,6 +385,23 @@ class ChatService:
         if weather_used:
             attribution = "\n\nWeather data: [Open-Meteo](https://open-meteo.com/) (CC BY 4.0)."
             response.feed(attribution)
+        if search_sources:
+            # Escape provider text as link labels; links are data, never fetched here.
+            links = []
+            for url, title in search_sources.items():
+                label = re.sub(r"([\\`*_{}\[\]()<>#!|])", r"\\\1", title)
+                parsed = urlsplit(url)
+                encoded = urlunsplit(
+                    (
+                        parsed.scheme,
+                        parsed.netloc,
+                        quote(parsed.path, safe="/%:@!$&'()*+,;=-._~"),
+                        quote(parsed.query, safe="=&%:@!$'()*+,;/?-._~"),
+                        quote(parsed.fragment, safe="%:@!$&'()*+,;=/?-._~"),
+                    )
+                )
+                links.append(f"- [{label}](<{encoded}>)")
+            response.feed("\n\nSources:\n" + "\n".join(links))
         agent.blocks = response.finish()
         return agent, text_content(agent.blocks)
 

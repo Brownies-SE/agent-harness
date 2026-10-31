@@ -140,3 +140,53 @@ def test_compaction_is_used_without_reusing_message_sequences(functional_api):
     assert response.json()["user"]["seq"] == 3
     assert client.post(path + "/memories/extract").status_code == 200
     assert len(client.get(path + "/messages").json()) == 4
+
+
+def test_utility_tools_are_discoverable_and_executable_through_existing_api(functional_api):
+    client, _ = functional_api
+    names = {tool["name"] for tool in client.get("/api/tools").json()}
+    assert {"get_current_time", "calculator_tool", "web_search"} <= names
+    conversation = client.post("/api/conversations", json={}).json()["id"]
+    cases = [
+        ("calculator_tool", {"expression": "0.1 + 0.2"}, "result", "0.3"),
+        (
+            "get_current_time",
+            {
+                "operation": "convert",
+                "timezone_name": "America/Denver",
+                "timestamp": "2026-11-01T08:30:00Z",
+            },
+            "local",
+            "2026-11-01T01:30:00-07:00",
+        ),
+    ]
+    for tool, arguments, key, value in cases:
+        response = client.post(
+            "/api/tool-calls",
+            json={"conversation_id": conversation, "tool": tool, "arguments": arguments},
+        )
+        assert response.status_code == 201
+        assert response.json()["status"] == "succeeded"
+        assert response.json()["output"][key] == value
+
+
+def test_api_tool_allow_cannot_override_host_search_deny(functional_api, monkeypatch):
+    client, _ = functional_api
+    monkeypatch.setattr(
+        "agent_harness.tools.web_search.transport",
+        lambda *a, **kw: pytest.fail("contacted search despite host deny"),
+    )
+    assert (
+        client.put("/api/tool-permissions/web_search", json={"policy": "allow"}).status_code == 200
+    )
+    conversation = client.post("/api/conversations", json={}).json()["id"]
+    response = client.post(
+        "/api/tool-calls",
+        json={
+            "conversation_id": conversation,
+            "tool": "web_search",
+            "arguments": {"query": "test"},
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["status"] == "denied"
