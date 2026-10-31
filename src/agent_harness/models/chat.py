@@ -43,6 +43,26 @@ class Conversation(StrictModel):
     updated_at: datetime
 
 
+class ConversationSearch(StrictModel):
+    query: str = Field(default="", max_length=200)
+    limit: int = Field(default=50, ge=1, le=100)
+    offset: int = Field(default=0, ge=0, le=2147483647)
+
+    @field_validator("query")
+    @classmethod
+    def valid_query(cls, value):
+        if "\x00" in value:
+            raise ValueError("invalid search")
+        return value.strip()
+
+
+class ConversationSearchHit(StrictModel):
+    conversation: Conversation
+    snippet: str = Field(max_length=400)
+    matched_message_id: UUID | None
+    matched_seq: int | None = Field(ge=1)
+
+
 class TextBlock(StrictModel):
     type: Literal["text"] = "text"
     text: str

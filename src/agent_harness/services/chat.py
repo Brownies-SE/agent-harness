@@ -9,6 +9,7 @@ from ..models.chat import (
     Conversation,
     ConversationCreate,
     ConversationRename,
+    ConversationSearchHit,
     CurrentUser,
     Exchange,
     Message,
@@ -78,6 +79,38 @@ class ChatService:
                 (self.owner, limit, offset),
             ).fetchall()
             return [Conversation.model_validate(row) for row in rows]
+
+    def search(self, request):
+        query = request.query.lower()
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT c.id,c.title,c.summary,c.compacted_through_message_id,"
+                "c.memory_processed_at,c.created_at,c.updated_at,"
+                "hit.id AS matched_message_id,hit.seq AS matched_seq,hit.text "
+                "FROM agent_chat.conversations c LEFT JOIN LATERAL ("
+                "SELECT m.id,m.seq,m.content #>> '{0,text}' AS text "
+                "FROM agent_chat.messages m WHERE m.conversation_id=c.id "
+                "AND strpos(lower(COALESCE(m.content #>> '{0,text}','')),%s)>0 "
+                "ORDER BY CASE WHEN %s='' THEN -m.seq ELSE m.seq END LIMIT 1) hit ON true "
+                "WHERE c.user_id=%s AND (%s='' OR strpos(lower(c.title),%s)>0 "
+                "OR hit.id IS NOT NULL) ORDER BY c.updated_at DESC,c.id DESC LIMIT %s OFFSET %s",
+                (query, query, self.owner, query, query, request.limit, request.offset),
+            ).fetchall()
+        result = []
+        for row in rows:
+            content = row["text"] or ""
+            start = max(0, content.lower().find(query) - 80) if query else 0
+            result.append(
+                ConversationSearchHit(
+                    conversation=Conversation.model_validate(
+                        {key: row[key] for key in Conversation.model_fields}
+                    ),
+                    snippet=content[start : start + 400],
+                    matched_message_id=row["matched_message_id"],
+                    matched_seq=row["matched_seq"],
+                )
+            )
+        return result
 
     def get(self, conversation_id: UUID) -> Conversation:
         with self.database.connect() as connection:

@@ -159,6 +159,7 @@ account setup; protect it alongside database and host configuration.
 | POST | `/api/auth/logout` | Session bearer; revokes that session, HTTP 204. |
 | GET | `/api/health` | Database availability and configured model name; does not probe inference. |
 | POST | `/api/conversations` | `{"title":"My chat"}` or `{}`; returns conversation, HTTP 201. |
+| `/api/conversations/search` | Search saved titles and message text with owner-scoped literal keyword matching; empty query returns recent chats. |
 | GET | `/api/conversations` | Conversation list; `limit` 1–100 (default 50), `offset` ≥ 0. |
 | GET | `/api/conversations/{id}` | Conversation metadata. |
 | PATCH | `/api/conversations/{id}` | `{"title":"Renamed"}`. |

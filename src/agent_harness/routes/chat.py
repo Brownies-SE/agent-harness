@@ -8,6 +8,8 @@ from ..models.chat import (
     Conversation,
     ConversationCreate,
     ConversationRename,
+    ConversationSearch,
+    ConversationSearchHit,
     CurrentUser,
     Exchange,
     Health,
@@ -49,6 +51,11 @@ def create_conversation(body: ConversationCreate, service: Service):
 @router.get("/conversations", response_model=list[Conversation])
 def list_conversations(service: Service, limit: Limit = 50, offset: Offset = 0):
     return service.list(limit=limit, offset=offset)
+
+
+@router.post("/conversations/search", response_model=list[ConversationSearchHit])
+def search_conversations(body: ConversationSearch, service: Service):
+    return service.search(body)
 
 
 @router.get("/conversations/{conversation_id}", response_model=Conversation)
