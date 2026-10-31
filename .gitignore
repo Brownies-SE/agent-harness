@@ -17,3 +17,8 @@ security-audit.jsonl
 
 *.sqlite3
 *.sqlite3-*
+
+# Host-specific settings and user/tool workspace content stay local.
+/harness.local.yaml
+/project/*
+!/project/README.md
