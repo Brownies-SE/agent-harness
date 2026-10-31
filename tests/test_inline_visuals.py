@@ -46,10 +46,10 @@ def test_split_references_emit_text_chart_text_without_leaking_markers():
     blocks = assembler.finish()
     assert [block.type for block in blocks] == ["text", "chart", "text"]
     assert blocks[0].text == "Before" and blocks[2].text == "After"
-    before, _, after = events[:6], events[6], events[7:]
-    assert "".join(text for kind, text in before) == "Before"
-    assert events[6] == ("chart", chart)
-    assert "".join(text for kind, text in after) == "After"
+    position = next(index for index, (kind, _) in enumerate(events) if kind == "chart")
+    assert "".join(text for kind, text in events[:position]) == "Before"
+    assert events[position] == ("chart", chart)
+    assert "".join(text for kind, text in events[position + 1 :]) == "After"
 
 
 @pytest.mark.parametrize("value", ["0" * 32, "../other", "a" * 33])

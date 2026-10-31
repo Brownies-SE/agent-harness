@@ -4,6 +4,7 @@ import re
 
 from ..core.errors import SecurityError
 from ..models.chat import TextBlock
+from .visual_wording import VisualWording
 
 PREFIX = "[[chart:"
 
@@ -17,8 +18,15 @@ class ResponseBlocks:
         self.buffer = ""
         self.blocks = []
         self.used = set()
+        self.wording = VisualWording(self._append_text)
 
     def _text(self, text):
+        if self.charts:
+            self.wording.feed(text)
+        else:
+            self._append_text(text)
+
+    def _append_text(self, text):
         if not text:
             return
         if self.blocks and isinstance(self.blocks[-1], TextBlock):
@@ -29,6 +37,7 @@ class ResponseBlocks:
             self.on_text(text)
 
     def _chart(self, chart_id):
+        self.wording.finish()
         if chart_id not in self.charts or chart_id in self.used:
             raise SecurityError("invalid_model_response")
         self.used.add(chart_id)
@@ -76,6 +85,7 @@ class ResponseBlocks:
             raise SecurityError("invalid_model_response")
         self._text(self.buffer)
         self.buffer = ""
+        self.wording.finish()
         # Legacy answers without references still retain approved tool output.
         for chart_id in self.charts:
             if chart_id not in self.used:

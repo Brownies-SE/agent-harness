@@ -282,6 +282,13 @@ displayed. Unreferenced approved charts keep the legacy append fallback, so exis
 models and old text-then-chart history remain compatible. The reference conveys no
 permission to run another tool or access saved artifacts from other turns.
 
+Chart-bearing replies use position-neutral visual references instead of unsupported
+claims such as "the chart above". A bounded text normalizer handles common deictic
+chart/diagram phrases consistently across stream chunks and saved text; code and numeric
+comparisons remain untouched. Existing saved replies receive the same presentation
+correction when read, including their variants, without modifying their stored rows.
+
+
 Saved assistant JSONB content is ordered, with at most nine blocks (four charts and
 five text blocks). A chart can appear first, between paragraphs or on its own. User
 messages remain one text block. The same order is retained by normal JSON responses,
@@ -290,8 +297,9 @@ Search, memory, compaction and conversation context join all text blocks, includ
 text after charts. Chart specs are not interpreted as instructions. Direct tool-call
 responses return data; attachment to a reply happens when its chat agent runs the tool.
 
-Lucid renders blocks as one continuous assistant response, without separate chart cards.
-Numerical charts use local SVG with focus/hover details and series toggles.
+Lucid renders blocks within one assistant response. Numeric charts have rounded cards;
+Mermaid diagrams stay unboxed. Numerical charts use local SVG with focus/hover details
+and series toggles.
 Mermaid is bundled locally, runs with strict host-controlled configuration, and its SVG
 is sanitized before insertion with scripts, images, links, CSS and external references
 removed. Diagrams support local zoom. These application checks are not an OS sandbox

@@ -18,10 +18,12 @@ from ..models.chat import (
     Exchange,
     Message,
     SendMessage,
+    TextBlock,
     text_content,
 )
 from .database import ChatError, Database
 from .response_blocks import ResponseBlocks
+from .visual_wording import neutral_visual_text
 
 
 class ChatService:
@@ -371,7 +373,28 @@ class ChatService:
                 "FROM agent_chat.message_variants WHERE message_id=%s ORDER BY ordinal",
                 (row["id"],),
             ).fetchall()
-        return Message.model_validate(values)
+        message = Message.model_validate(values)
+
+        def present(blocks):
+            if not any(isinstance(block, ChartBlock) for block in blocks):
+                return blocks
+            return [
+                TextBlock(text=neutral_visual_text(block.text))
+                if isinstance(block, TextBlock)
+                else block
+                for block in blocks
+            ]
+
+        # Old replies get the same presentation correction without a data migration.
+        return message.model_copy(
+            update={
+                "content": present(message.content),
+                "variants": [
+                    variant.model_copy(update={"content": present(variant.content)})
+                    for variant in message.variants
+                ],
+            }
+        )
 
     @staticmethod
     def _reply(connection, conversation_id, message_id):

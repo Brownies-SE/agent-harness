@@ -60,6 +60,8 @@ class LangGraphAgent:
                 "display data: copy that exact [[chart:...]] string into your final answer "
                 "at the chart position. Usually introduce the chart briefly, insert its "
                 "reference, then explain what it shows. Follow the user's requested order. "
+                "Refer to visuals by their title or as 'the chart' or 'the diagram'; "
+                "avoid above/below wording because their positions can vary. "
                 "Do not put the reference in backticks or code fences. "
                 "Use only references returned by successful calls in this run; never invent IDs."
             )
