@@ -19,19 +19,36 @@ MCP tools require trusted host capability/resource mappings. Discovery and serve
 never grant authority. Approvals satisfy ask rules only and cannot override denials or
 resource limits. Tool results and schemas remain untrusted data.
 
-The HTTP backend and CLI have no interactive approval UI or approval callback;
-tools requiring `ask` fail closed. Only a trusted library host may install a callback.
+The CLI has no interactive approval UI; missing callbacks deny `ask` tools.
+The HTTP backend installs a trusted callback that records pending requests without
+executing them. An authenticated explicit approval rechecks current policy/resources
+and can execute only the saved request once. Stored tool preferences add restrictions;
+an `allow` row cannot override host denials. Each approval claim is atomic, and stale
+completion/failure callbacks cannot overwrite a separately claimed execution.
 OpenAPI declares bearer authentication, and the HTTP boundary validates its token
 before reading a request body. Internal execution/security modules live in `core/`;
 tool implementations live in `tools/`.
 
-The PostgreSQL schema includes the full requested catalog, connection, permission,
-tool-call, file and memory tables. These are storage contracts, not execution grants.
-No service automatically registers tools, changes host policy, decrypts credentials,
-replays tool calls or loads memories from those rows. MCP schemas and any future
-recalled content remain untrusted. File/memory references and compaction markers are
-scoped at the database boundary; this does not replace authorization in future routes.
-Credential-writing services must encrypt token bytes with trusted host-managed keys.
+The PostgreSQL-backed resource services enforce owner scope and strict request models.
+Tool call records are written before execution, including separate host connection
+lifecycle records, and storage failures prevent execution. MCP tools register only
+from host-reviewed capability/resource mappings pinned to exact local endpoints.
+API catalog edits cannot transfer grants or existing credentials to a new identity;
+identity changes clear encrypted credentials and require reconnection. Connection
+tokens are encrypted with a private host-managed Fernet key and are never returned.
+Server identity/credential reads and catalog edits use transaction locks to avoid
+credential rebinding races. stdio commands are not accepted by the HTTP API.
+
+Memories use bounded local embeddings, owner-scoped vector search and model-space
+identity. Recalled text and summaries are untrusted observations, never authoritative
+instructions. Extraction/compaction make tool-free local inference calls and validate
+structured outputs. File blobs use private host-owned directories outside tool roots,
+random keys and descriptor-relative no-follow I/O; clients cannot select storage paths.
+File/memory references and compaction markers are scoped at the database boundary.
+
+Swagger and ReDoc shells/assets are public only at fixed paths after Host validation;
+the schema and API data remain bearer-protected. Documentation serves pinned assets
+locally, does not persist tokens, and only adds authorization to same-origin requests.
 
 Run limits, cancellation and metadata-only local history apply to LangGraph. Arbitrary
 Python/MCP handlers and DNS remain cooperative; stronger containment requires OS-level

@@ -45,8 +45,8 @@ all tool networking and subprocess execution. An empty `Policy()` denies every
 capability and filesystem root. CLI results and security events escape terminal controls to
 avoid terminal control injection. There is no interactive terminal chat or approval UI.
 Running `agent-harness` without arguments prints administration command help. The
-CLI and HTTP backend deny tools requiring approval; trusted library hosts can supply
-their own approval callback. Audit events go to stderr for CLI runs; redirect them to a local
+CLI denies tools requiring approval; the HTTP backend stores them for explicit API
+approval. Trusted library hosts can supply their own approval callback. Audit events go to stderr for CLI runs; redirect them to a local
 file if persistence is needed. Prompts passed with `--prompt` can appear in your OS
 process list and shell history; avoid putting secrets in CLI arguments.
 
@@ -108,9 +108,15 @@ embeddings. File/memory conversation references enforce owner scope; compaction
 markers must reference a message in the same conversation.
 Use `--migrate-only` to apply migrations without starting HTTP; use `--port` to
 change the default port 8000. Start your configured local inference server separately.
-The server requires `local_only: true` and `telemetry: false`.
+The server requires `local_only: true` and `telemetry: false`. FastAPI tracing,
+metrics, logs and automatic telemetry configuration are explicitly disabled.
 
-Every HTTP request requires `Authorization: Bearer <HARNESS_API_TOKEN>`, including
+Open [ReDoc](http://127.0.0.1:8000/redoc) for the reference or
+[Swagger](http://127.0.0.1:8000/docs) to try requests. These documentation shells and
+their pinned JS/CSS assets are served locally without authentication; they contain
+no user data. Paste `HARNESS_API_TOKEN` from your private environment file into the
+page to load the schema. Tokens stay in page memory, never URLs or browser storage.
+Every API request requires `Authorization: Bearer <HARNESS_API_TOKEN>`, including
 health and `/openapi.json`. OpenAPI declares HTTP bearer security for every API
 operation, so generated clients can supply the token. The server binds only `127.0.0.1`, rejects other Host
 headers, disables proxy-header trust and access logs, and returns `Cache-Control:
@@ -141,26 +147,94 @@ HTTP 409. Reopening a conversation loads its saved history; inference receives a
 most eight recent exchanges within an 8000-character serialized context budget.
 Older messages stay in the database. Usage counts are provider-reported per turn.
 
-All tool calls still pass through `Executor.execute`. The HTTP backend does not
-implement approval callbacks yet, so tools requiring `ask` are denied. It cannot
-accept policy, model, handler or owner overrides from HTTP or saved messages.
-There is no streaming, cancellation endpoint, automatic retry, or interrupted-run
-resumption. A disconnected client can leave its bounded turn running. Completed
-tool side effects cannot be undone by transaction rollback: inspect history before
-retrying a request whose result was lost.
+All model and direct tool requests pass through `Executor.execute`. Calls requiring
+approval are stored as `awaiting_approval`; approving through the API rechecks the
+current host policy and resources, then executes the exact saved request once.
+Chat text cannot approve a tool. Additional per-tool `allow`/`ask`/`deny` preferences
+can restrict the host policy but cannot expand it. Declared deny/resource restrictions
+always win. Tool execution logs survive failed chat turns and link to the assistant
+message after successful persistence. Connection lifecycle logs have no conversation.
 
-PostgreSQL intentionally stores user and assistant text, unlike metadata-only CLI
-run history. API tool arguments/results and durable tool audit events are not stored
-in these chat tables. PostgreSQL administrators, host configuration and local
-processes with credentials are trusted; loopback checks are not an OS sandbox.
-Secure and back up the database yourself. All ten requested application tables are
-present. The additional tables provide storage contracts, not automatic feature
-activation: HTTP routes for MCP connections, file/blob operations, memory retrieval,
-compaction and tool-call persistence are not implemented. Credential fields are
-reserved for encrypted bytes; a trusted credential-writing service and host-managed
-keys must be implemented before using them. Cached MCP schemas and stored
-`tool_permissions` rows cannot authorize tools, change policy or register handlers.
-Cache-read counts currently default to zero; cache accounting is not collected.
+The API provides working operations for the remaining resources:
+
+| API | Operations |
+| --- | --- |
+| `/api/me` | Inspect the host-selected local owner. |
+| `/api/models` | Installed/loaded chat and embedding model sizes, local policy and free disk bytes. |
+| `/api/embeddings` | Generate real local 1024-dimensional vectors from `texts`; optional `query` prefix. |
+| `/api/memories` | Create/list/get/update/delete facts with vectors generated on writes. |
+| `/api/memories/search` | Owner-scoped cosine search using `query`, `limit` and optional `min_score`. |
+| `/api/conversations/{id}/memories/extract` | Extract new user facts with the local model; repeated calls are incremental. |
+| `/api/conversations/{id}/compact` | Generate and store a local summary; keep the original messages. |
+| `/api/files` | Upload base64 content, list/get metadata, download `{id}/content`, and delete. |
+| `/api/tools`, `/api/tools/search` | Inspect/search the host-registered tool catalog. |
+| `/api/tool-permissions` | List/PUT/DELETE additional per-tool restrictions. |
+| `/api/tool-calls` | Execute a request for a conversation, list/get execution records. |
+| `/api/tool-calls/{id}/approval` | Submit `{"decision":"approve"}` or `{"decision":"deny"}`. |
+| `/api/mcp/servers` | Create/list/get/update/delete local HTTP MCP catalog entries and inspect cached tools. |
+| `/api/mcp/connections` | Create/list/get/update/delete owned encrypted credentials; `{id}/check` and `{id}/refresh` perform real discovery. |
+
+Install the local embedding model explicitly with `ollama pull mxbai-embed-large`
+(approximately 670 MB). It emits 1024 dimensions and has a 512-token input window;
+oversized embedding inputs are rejected rather than silently truncated. Configure:
+
+```yaml
+embeddings:
+  endpoint: http://127.0.0.1:11434
+  model: mxbai-embed-large
+```
+
+Memory search uses the configured model's vector space; old vectors from another
+model are excluded until updated/re-embedded. Chat recalls up to three matching
+memories using the first 400 characters of the query while sending the complete
+user message to chat inference. Summaries and memories enter chat as bounded,
+explicitly untrusted observations, never system messages or permission grants.
+Extraction and compaction are explicit API actions, not automatic background jobs.
+Cache-read usage is recorded when the provider reports `prompt_tokens_details`.
+
+File blobs live in a host-owned private `0700` directory outside the tool workspace;
+set `HARNESS_FILES_DIR` to override the default local state directory. File names are
+display names; clients cannot choose storage paths. Credentials use Fernet encryption
+with `HARNESS_CREDENTIAL_KEY`; generate a key after installation with:
+
+```bash
+.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+Save that key privately in `.env.local` and retain it across restarts. The API never
+returns token plaintext or ciphertext. Losing the key requires reconnecting those
+servers. OAuth connections accept separately obtained tokens and track expiration;
+automatic external OAuth login is not implemented.
+
+For MCP, provide an actual local **streamable HTTP** server, allow its exact host
+and port in trusted YAML, and review each tool's capabilities/resources. Pin its
+catalog name to the exact endpoint as well:
+
+```yaml
+mcp_endpoints:
+  reviewed_server: http://127.0.0.1:9000/mcp
+mcp_permissions:
+  reviewed_server:
+    reviewed_pure_tool:
+      capabilities: []
+      resources: {}
+```
+
+The server connection itself also needs the configured `network` startup grant;
+connection approval never authorizes a tool. Catalog metadata never supplies these
+mappings. Changing server identity clears its credentials and requires reconnection.
+The HTTP API rejects stdio commands and legacy SSE connection setup; trusted library
+hosts can still provide separately reviewed clients to `MCPAdapter`. It does not
+launch arbitrary commands or invent missing integration credentials. Streamable HTTP
+JSON and event-stream responses are supported with bounded parsing and session checks.
+
+There is no token streaming, cancellation endpoint, automatic action retry or
+interrupted-run resumption. A disconnected client can leave its bounded turn running.
+Completed tool side effects cannot be undone by database rollback: inspect tool-call
+history before retrying a request whose result was lost. PostgreSQL intentionally
+stores text, memories and tool arguments/results. Database administrators, host
+configuration and credential-holding local processes are trusted; loopback checks are
+not an OS sandbox. Secure and back up the database, blobs and encryption key yourself.
 
 Run database/API integration tests against the separate test database:
 
@@ -236,7 +310,8 @@ heuristic, not a secret detector: avoid mounting unrelated data or credentials a
 Concurrent renames by another OS process and malicious native code require OS isolation.
 
 Approvals are trusted host callbacks returning `once`, `run`, or `deny`.
-The CLI and HTTP backend install no approval callback; tools requiring `ask` deny.
+The noninteractive CLI installs no approval callback; tools requiring `ask` deny.
+The HTTP backend records pending requests for explicit API approval.
 Missing or failing callbacks also deny.
 A run approval is scoped to tool + canonical arguments + capabilities, resets between
 agent runs, and never bypasses deny rules, paths or network restrictions. One executor
@@ -441,8 +516,8 @@ responses; live Ollama evaluation is explicit and never downloads models automat
 
 Run this against your configured local model to measure its task reliability. The suite
 reports failures honestly; a final answer alone does not count as task success.
-Context compaction and interrupted-run resumption are not implemented. The HTTP
-backend can reopen stored chat exchanges.
+The HTTP backend supports explicit local compaction and stored chat reopening.
+Interrupted-run resumption is not implemented.
 
 ## Development
 

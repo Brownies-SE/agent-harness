@@ -7,7 +7,12 @@ from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 from pydantic import ValidationError
 
-MIGRATIONS = ("0001_chat.sql", "0002_resources.sql")
+MIGRATIONS = (
+    "0001_chat.sql",
+    "0002_resources.sql",
+    "0003_execution.sql",
+    "0004_connection_audit.sql",
+)
 
 
 class ChatError(Exception):

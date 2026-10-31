@@ -73,3 +73,9 @@ class Health(StrictModel):
 
 class ErrorResponse(StrictModel):
     detail: str
+
+
+class CurrentUser(StrictModel):
+    id: UUID
+    email: str
+    created_at: datetime

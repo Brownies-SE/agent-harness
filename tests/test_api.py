@@ -150,6 +150,14 @@ def test_api_errors_do_not_echo_input_or_storage_errors(api, monkeypatch):
     assert "secret" not in response.text
 
 
+@pytest.mark.parametrize("path", ["/api/memories", "/api/files", "/api/mcp/servers", "/api/tools"])
+def test_unconfigured_optional_services_fail_with_fixed_api_error(api, path):
+    client, _ = api
+    response = client.get(path)
+    assert response.status_code == 503
+    assert set(response.json()) == {"detail"}
+
+
 def test_api_tool_proposals_cannot_bypass_executor_or_approve_writes(api, tmp_path):
     client, service = api
     attempts = iter(

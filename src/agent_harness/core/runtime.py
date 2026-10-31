@@ -61,6 +61,7 @@ class RunControl:
         self.denied_tools = 0
         self.input_tokens = 0
         self.output_tokens = 0
+        self.cache_read_tokens = 0
         self.status = "created"
         self.reason = ""
 
@@ -107,6 +108,10 @@ class RunControl:
             value = usage.get(field) if isinstance(usage, dict) else None
             if type(value) is int and 0 <= value <= 1000000000:
                 setattr(self, attribute, getattr(self, attribute) + value)
+        details = usage.get("prompt_tokens_details") if isinstance(usage, dict) else None
+        cached = details.get("cached_tokens") if isinstance(details, dict) else None
+        if type(cached) is int and 0 <= cached <= 1000000000:
+            self.cache_read_tokens += cached
 
     def finish(self, status, reason=""):
         self.status = status

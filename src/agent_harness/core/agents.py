@@ -44,6 +44,7 @@ class LangGraphAgent:
         self.on_event = on_event
         self.last_run = None
         self._context = []
+        self._observations = []
 
     def initial(self, prompt):
         if not isinstance(prompt, str):
@@ -58,6 +59,19 @@ class LangGraphAgent:
                 [
                     {"role": "system", "content": system},
                     *self._context,
+                    *[
+                        {
+                            "role": "tool",
+                            "content": json.dumps(
+                                {
+                                    "trust": "untrusted_data",
+                                    "source": "recalled_context",
+                                    "data": text,
+                                }
+                            ),
+                        }
+                        for text in self._observations
+                    ],
                     {"role": "user", "content": prompt},
                 ]
             ),
@@ -105,7 +119,7 @@ class LangGraphAgent:
         ]
         return State(messages=messages, steps=state["steps"] + 1, done=False, answer="")
 
-    def run(self, prompt, *, cancel=None, context=None):
+    def run(self, prompt, *, cancel=None, context=None, observations=None):
         context = json_copy(context if context is not None else [])
         if not isinstance(context, list) or any(
             not isinstance(message, dict)
@@ -117,6 +131,15 @@ class LangGraphAgent:
         ):
             raise SecurityError("invalid_request")
         self._context = context
+        observations = json_copy(observations if observations is not None else [])
+        if (
+            type(observations) is not list
+            or len(observations) > 5
+            or any(type(text) is not str or len(text) > 8000 for text in observations)
+            or sum(len(text) for text in observations) > 16000
+        ):
+            raise SecurityError("invalid_request")
+        self._observations = observations
         self.last_run = RunControl(
             self.limits, cancel=cancel, history=self.history, on_event=self.on_event
         )

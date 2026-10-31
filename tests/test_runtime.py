@@ -12,6 +12,13 @@ from agent_harness.tools.filesystem import filesystem_tools
 from agent_harness.tools.network import check_url, transport
 
 
+def test_cache_usage_counts_only_valid_provider_numbers():
+    control = RunControl()
+    control.usage({"prompt_tokens_details": {"cached_tokens": 9}})
+    control.usage({"prompt_tokens_details": {"cached_tokens": True}})
+    assert control.cache_read_tokens == 9
+
+
 class Decisions:
     def __init__(self, responses):
         self.responses = iter(responses)

@@ -27,11 +27,12 @@ class MCPAdapter:
     No SDK/stdio process or network client is started by merely constructing this adapter.
     """
 
-    def __init__(self, executor, server, factory, *, endpoint=None):
+    def __init__(self, executor, server, factory, *, endpoint=None, connection_id=None):
         self.executor = executor
         self.server = server
         self.factory = factory
         self.endpoint = endpoint
+        self.connection_id = connection_id
         self.client = None
         self._connected = False
 
@@ -93,6 +94,7 @@ class MCPAdapter:
                             permission.capabilities,
                             handler,
                             permission.resources,
+                            connection_id=self.connection_id,
                         )
                     )
                 self.executor.register_many(pending)
@@ -113,5 +115,7 @@ class MCPAdapter:
                 raise
 
         name = f"mcp.{self.server}.connect"
-        self.executor.register(Tool(name, schema, capabilities, establish, resources))
+        self.executor.register(
+            Tool(name, schema, capabilities, establish, resources, connection_id=self.connection_id)
+        )
         return self.executor.execute({"tool": name, "arguments": args})

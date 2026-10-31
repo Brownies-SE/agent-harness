@@ -92,7 +92,7 @@ def test_complete_requested_schema_exists_and_migration_is_idempotent(chat_datab
             for row in connection.execute(
                 "SELECT version FROM agent_chat.schema_migrations ORDER BY version"
             ).fetchall()
-        ] == [1, 2]
+        ] == [1, 2, 3, 4]
     assert chat.get(conversation.id).title == "preserved"
     assert len(chat.messages(conversation.id)) == 2
 

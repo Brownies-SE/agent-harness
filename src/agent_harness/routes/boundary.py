@@ -1,13 +1,16 @@
 """Bounded, authenticated local HTTP boundary. This is not an OS sandbox."""
 
+import json
 import re
 import secrets
 
 from starlette.responses import JSONResponse
 
 from agent_harness.model import strict_json
+from agent_harness.routes.documentation import PUBLIC_DOCUMENTATION_PATHS
 
 MAX_BODY_BYTES = 64 * 1024
+MAX_UPLOAD_BODY_BYTES = 8 * 1024 * 1024
 
 
 class LocalHTTPBoundary:
@@ -40,17 +43,25 @@ class LocalHTTPBoundary:
             await reject(400, "invalid_host")
             return
         auth = [v for k, v in headers if k == b"authorization"]
-        if len(auth) != 1 or not secrets.compare_digest(auth[0], self.authorization):
+        public_docs = scope["method"] == "GET" and scope["path"] in PUBLIC_DOCUMENTATION_PATHS
+        if not public_docs and (
+            len(auth) != 1 or not secrets.compare_digest(auth[0], self.authorization)
+        ):
             await reject(401, "authentication_required")
             return
 
+        body_limit = (
+            MAX_UPLOAD_BODY_BYTES
+            if scope["method"] == "POST" and scope["path"] == "/api/files"
+            else MAX_BODY_BYTES
+        )
         body = bytearray()
         while True:
             message = await receive()
             if message["type"] == "http.disconnect":
                 return
             body.extend(message.get("body", b""))
-            if len(body) > MAX_BODY_BYTES:
+            if len(body) > body_limit:
                 await reject(413, "payload_too_large")
                 return
             if not message.get("more_body", False):
@@ -64,7 +75,7 @@ class LocalHTTPBoundary:
                 await reject(415, "json_required")
                 return
             try:
-                strict_json(bytes(body))
+                json.dumps(strict_json(bytes(body)), allow_nan=False)
             except (ValueError, UnicodeError, RecursionError):
                 await reject(422, "invalid_request")
                 return

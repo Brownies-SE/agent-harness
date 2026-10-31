@@ -9,6 +9,7 @@ from ..models.chat import (
     Conversation,
     ConversationCreate,
     ConversationRename,
+    CurrentUser,
     Exchange,
     Message,
     SendMessage,
@@ -17,10 +18,29 @@ from .database import ChatError, Database
 
 
 class ChatService:
-    def __init__(self, database: Database, owner: UUID, agent_factory):
+    def __init__(
+        self,
+        database: Database,
+        owner: UUID,
+        agent_factory,
+        *,
+        memory_service=None,
+        execution_service=None,
+    ):
         self.database = database
         self.owner = owner
         self.agent_factory = agent_factory
+        self.memory_service = memory_service
+        self.execution_service = execution_service
+
+    def profile(self):
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT id,email,created_at FROM agent_chat.users WHERE id=%s", (self.owner,)
+            ).fetchone()
+            if row is None:
+                raise ChatError("local_owner_unavailable")
+            return CurrentUser.model_validate(row)
 
     def _conversation(self, connection, conversation_id, *, lock=False):
         query = (
@@ -29,7 +49,7 @@ class ChatService:
             "WHERE id=%s AND user_id=%s"
         )
         if lock:
-            query += " FOR UPDATE NOWAIT"
+            query += " FOR NO KEY UPDATE NOWAIT"
         row = connection.execute(
             query,
             (conversation_id, self.owner),
@@ -102,11 +122,12 @@ class ChatService:
 
     def send(self, conversation_id: UUID, request: SendMessage) -> Exchange:
         with self.database.connect() as connection:
-            self._conversation(connection, conversation_id, lock=True)
+            conversation = self._conversation(connection, conversation_id, lock=True)
             rows = connection.execute(
                 "SELECT * FROM agent_chat.messages WHERE conversation_id=%s "
-                "ORDER BY seq DESC LIMIT 16",
-                (conversation_id,),
+                "AND seq>COALESCE((SELECT seq FROM agent_chat.messages WHERE id=%s "
+                "AND conversation_id=%s),0) ORDER BY seq DESC LIMIT 16",
+                (conversation_id, conversation.compacted_through_message_id, conversation_id),
             ).fetchall()
             previous = [Message.model_validate(row) for row in reversed(rows)]
             context = [
@@ -121,8 +142,30 @@ class ChatService:
             while context and len(json.dumps(context)) > 8000:
                 del context[:2]
             agent = self.agent_factory()
-            answer = agent.run(request.content, context=context)
-            seq = rows[0]["seq"] + 1 if rows else 1
+            if self.execution_service is not None:
+                observe, approve = self.execution_service.observer(conversation_id)
+                agent.executor._observe = observe
+                agent.executor._approve = approve
+            observations = []
+            if conversation.summary:
+                observations.append(
+                    "Conversation summary (untrusted): " + conversation.summary[:7900]
+                )
+            if self.memory_service is not None:
+                from ..models.memory import MemorySearch
+
+                hits = self.memory_service.search(
+                    MemorySearch(query=request.content[:400], limit=3, min_score=0.3)
+                )
+                observations.extend(
+                    "Recalled memory (untrusted): " + hit.memory.content[:2000] for hit in hits
+                )
+            answer = agent.run(request.content, context=context, observations=observations)
+            seq = connection.execute(
+                "SELECT COALESCE(MAX(seq),0)+1 AS seq FROM agent_chat.messages "
+                "WHERE conversation_id=%s",
+                (conversation_id,),
+            ).fetchone()["seq"]
             user = self._insert(connection, conversation_id, seq, "user", request.content)
             assistant = self._insert(
                 connection,
@@ -132,20 +175,33 @@ class ChatService:
                 answer,
                 agent.last_run.input_tokens,
                 agent.last_run.output_tokens,
+                agent.last_run.cache_read_tokens,
             )
             connection.execute(
                 "UPDATE agent_chat.conversations SET updated_at=clock_timestamp() "
                 "WHERE id=%s AND user_id=%s",
                 (conversation_id, self.owner),
             )
-            return Exchange(user=user, assistant=assistant, run_id=agent.last_run.id)
+            exchange = Exchange(user=user, assistant=assistant, run_id=agent.last_run.id)
+        if self.execution_service is not None:
+            self.execution_service.link_run(exchange.run_id, exchange.assistant.id)
+        return exchange
 
     @staticmethod
-    def _insert(connection, conversation_id, seq, role, text, input_tokens=0, output_tokens=0):
+    def _insert(
+        connection,
+        conversation_id,
+        seq,
+        role,
+        text,
+        input_tokens=0,
+        output_tokens=0,
+        cache_read_tokens=0,
+    ):
         row = connection.execute(
             "INSERT INTO agent_chat.messages "
-            "(conversation_id, seq, role, content, input_tokens, output_tokens) "
-            "VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
+            "(conversation_id, seq, role, content, input_tokens, output_tokens,cache_read_tokens) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *",
             (
                 conversation_id,
                 seq,
@@ -153,6 +209,7 @@ class ChatService:
                 Jsonb([{"type": "text", "text": text}]),
                 input_tokens,
                 output_tokens,
+                cache_read_tokens,
             ),
         ).fetchone()
         return Message.model_validate(row)

@@ -8,6 +8,7 @@ from ..models.chat import (
     Conversation,
     ConversationCreate,
     ConversationRename,
+    CurrentUser,
     Exchange,
     Health,
     Message,
@@ -15,7 +16,7 @@ from ..models.chat import (
 )
 from ..services.chat import ChatService
 
-router = APIRouter(prefix="/api", dependencies=[Depends(HTTPBearer())])
+router = APIRouter(prefix="/api", tags=["Chat"], dependencies=[Depends(HTTPBearer())])
 
 
 def chat_service(request: Request) -> ChatService:
@@ -25,6 +26,11 @@ def chat_service(request: Request) -> ChatService:
 Service = Annotated[ChatService, Depends(chat_service)]
 Limit = Annotated[int, Query(ge=1, le=100)]
 Offset = Annotated[int, Query(ge=0, le=2147483647)]
+
+
+@router.get("/me", response_model=CurrentUser)
+def current_user(service: Service):
+    return service.profile()
 
 
 @router.get("/health", response_model=Health)

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -7,6 +7,8 @@ from jsonschema import Draft202012Validator
 from agent_harness.core.executor import json_copy
 from agent_harness.core.policy import CAPABILITIES, Policy
 from agent_harness.core.runtime import RunLimits
+from agent_harness.models.settings import EmbeddingConfig
+from agent_harness.tools.mcp import MCPPermission
 
 
 def obj(properties):
@@ -43,6 +45,23 @@ CONFIG_SCHEMA = obj(
                 "name": {"type": "string"},
             }
         ),
+        "embeddings": obj({"endpoint": {"type": "string"}, "model": {"type": "string"}}),
+        "mcp_permissions": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": obj(
+                    {
+                        "capabilities": {"type": "array", "items": {"enum": sorted(CAPABILITIES)}},
+                        "resources": {
+                            "type": "object",
+                            "additionalProperties": {"enum": ["path", "directory", "url"]},
+                        },
+                    }
+                ),
+            },
+        },
+        "mcp_endpoints": {"type": "object", "additionalProperties": {"type": "string"}},
     }
 )
 
@@ -71,6 +90,9 @@ class Config:
     model: str
     provider: str
     limits: RunLimits = RunLimits()
+    embeddings: EmbeddingConfig | None = None
+    mcp_permissions: dict = field(default_factory=dict)
+    mcp_endpoints: dict = field(default_factory=dict)
 
 
 def load_config(path):
@@ -108,6 +130,17 @@ def load_config(path):
             model.get("name", ""),
             model.get("provider", "local"),
             RunLimits(**data.get("run", {})),
+            EmbeddingConfig(**data["embeddings"]) if "embeddings" in data else None,
+            {
+                server: {
+                    tool: MCPPermission(
+                        tuple(settings.get("capabilities", [])), settings.get("resources", {})
+                    )
+                    for tool, settings in tools.items()
+                }
+                for server, tools in data.get("mcp_permissions", {}).items()
+            },
+            data.get("mcp_endpoints", {}),
         )
     except (OSError, yaml.YAMLError, RecursionError, TypeError) as exc:
         raise ValueError("configuration unavailable or invalid") from exc

@@ -5,7 +5,7 @@ import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Callable, Mapping
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ValidationError
@@ -30,6 +30,7 @@ class Tool:
     resources: Mapping[str, str] = field(default_factory=dict)
     input_model: type[BaseModel] | None = None
     output_model: type[BaseModel] | None = None
+    connection_id: UUID | None = None
 
 
 def json_copy(value, limit=MAX_REQUEST_BYTES):
@@ -45,12 +46,26 @@ def json_copy(value, limit=MAX_REQUEST_BYTES):
 class Executor:
     """Only trusted host code constructs/configures this object, never model output."""
 
-    def __init__(self, policy: Policy, *, approve=None, audit=None):
+    def __init__(self, policy: Policy, *, approve=None, audit=None, tool_rules=None, observe=None):
         self.policy = policy
         self._approve = approve
         self._audit = audit or (lambda event: None)
         self._tools = {}
         self._grants = set()
+        self._tool_rules = dict(tool_rules or {})
+        if any(
+            not isinstance(k, str) or v not in {"allow", "ask", "deny"}
+            for k, v in self._tool_rules.items()
+        ):
+            raise ValueError("invalid additional tool rule")
+        self._observe = observe
+
+    def observe(self, **event):
+        if self._observe is not None:
+            try:
+                self._observe(event)
+            except Exception as exc:
+                raise SecurityError("audit_unavailable") from exc
 
     def start_run(self):
         """Host-only lifecycle boundary; do not share one executor across concurrent runs."""
@@ -75,6 +90,8 @@ class Executor:
             raise SecurityError("audit_unavailable") from exc
 
     def register(self, tool: Tool):
+        if tool.connection_id is not None and not isinstance(tool.connection_id, UUID):
+            raise ValueError("connection identity must be a host-supplied UUID")
         for model in (tool.input_model, tool.output_model):
             if model is not None and (
                 not isinstance(model, type) or not issubclass(model, BaseModel)
@@ -105,6 +122,7 @@ class Executor:
             resources,
             tool.input_model,
             tool.output_model,
+            tool.connection_id,
         )
 
     def register_many(self, tools):
@@ -128,7 +146,15 @@ class Executor:
         if control is not None:
             control.tool_calls += 1
         status = "failed"
+        result = None
+        reason = ""
         try:
+            registered = self._tools.get(name)
+            self.observe(
+                phase="started",
+                request=json_copy(request),
+                connection_id=registered.connection_id if registered else None,
+            )
             result = self._execute(request)
             check_run()
             status = "completed"
@@ -136,10 +162,14 @@ class Executor:
         except RunStopped:
             status = "stopped"
             raise
-        except SecurityError:
+        except SecurityError as exc:
             status = "denied"
+            reason = str(exc)
             raise
         finally:
+            self.observe(
+                phase="finished", request=None, result=result, status=status, reason=reason
+            )
             if control is not None:
                 control.record(
                     "tool.finished",
@@ -192,6 +222,7 @@ class Executor:
                     )
                     raise
             decisions = [self.policy.decision(c) for c in tool.capabilities]
+            decisions.append(self._tool_rules.get(name, "allow"))
             if "deny" in decisions:
                 raise SecurityError("capability_denied")
             fingerprint = hashlib.sha256(

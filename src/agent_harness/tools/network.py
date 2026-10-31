@@ -82,8 +82,35 @@ def check_url(policy, raw, *, inference=False):
         raise SecurityError("invalid_url") from exc
 
 
-def transport(target, *, method="GET", body=None, limit=256 * 1024, timeout=15):
+def transport(
+    target,
+    *,
+    method="GET",
+    body=None,
+    limit=256 * 1024,
+    timeout=15,
+    headers=None,
+    response_headers=None,
+    stop_when=None,
+):
     """Connect to the checked IP once; no proxies, redirects or second DNS lookup."""
+    request_headers = {"Content-Type": "application/json", "Connection": "close"}
+    if headers is not None:
+        if not isinstance(headers, dict):
+            raise SecurityError("invalid_request")
+        for key, value in headers.items():
+            if (
+                not isinstance(key, str)
+                or not isinstance(value, str)
+                or key.lower() in {"host", "connection", "content-length", "transfer-encoding"}
+                or not key
+                or len(key) > 128
+                or len(value) > 8192
+                or any(ord(c) < 33 or ord(c) > 126 or c == ":" for c in key)
+                or any(ord(c) < 32 or ord(c) > 126 for c in value)
+            ):
+                raise SecurityError("invalid_request")
+            request_headers[key] = value
     control = check_run()
     done = threading.Event()
     expired = threading.Event()
@@ -136,12 +163,30 @@ def transport(target, *, method="GET", body=None, limit=256 * 1024, timeout=15):
             method,
             target.path,
             body=body,
-            headers={"Content-Type": "application/json", "Connection": "close"},
+            headers=request_headers,
         )
         response = connection.getresponse()
+        if response_headers is not None:
+            received = response.getheaders()
+            if sum(len(k) + len(v) for k, v in received) > 16384:
+                raise SecurityError("response_too_large")
+            response_headers.update({k.lower(): v for k, v in received})
+            response_headers["__status_code__"] = str(response.status)
         if not 200 <= response.status < 300:
             raise SecurityError("http_status_denied")
-        data = response.read(limit + 1)
+        if stop_when is None:
+            data = response.read(limit + 1)
+        else:
+            chunks = bytearray()
+            while len(chunks) <= limit:
+                chunk = response.read1(min(4096, limit + 1 - len(chunks)))
+                if not chunk:
+                    break
+                chunks.extend(chunk)
+                check_run()
+                if stop_when(bytes(chunks)):
+                    break
+            data = bytes(chunks)
         if len(data) > limit:
             raise SecurityError("response_too_large")
         check_run()
