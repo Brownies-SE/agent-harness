@@ -289,6 +289,13 @@ comparisons remain untouched. Existing saved replies receive the same presentati
 correction when read, including their variants, without modifying their stored rows.
 
 
+For chart-related requests, host code checks common claims of a displayed visual
+against successful chart-tool results. Missing results trigger at most two formatting
+corrections within the existing run limits; corrections grant no permissions. Unverified
+text is held until a chart succeeds or an honest text-only answer is accepted. This
+presentation check does not prove all model prose truthful. Historical chart data is
+included as untrusted text for follow-up requests, without reusable chart references.
+
 Saved assistant JSONB content is ordered, with at most nine blocks (four charts and
 five text blocks). A chart can appear first, between paragraphs or on its own. User
 messages remain one text block. The same order is retained by normal JSON responses,

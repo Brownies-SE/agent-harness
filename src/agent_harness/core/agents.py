@@ -45,6 +45,7 @@ class LangGraphAgent:
         self.on_event = on_event
         self.last_run = None
         self.on_text = None
+        self.final_check = None
         self._context = []
         self._observations = []
 
@@ -63,7 +64,10 @@ class LangGraphAgent:
                 "Refer to visuals by their title or as 'the chart' or 'the diagram'; "
                 "avoid above/below wording because their positions can vary. "
                 "Do not put the reference in backticks or code fences. "
-                "Use only references returned by successful calls in this run; never invent IDs."
+                "Use only references returned by successful calls in this run; never invent IDs. "
+                "Never claim a chart is displayed unless chart_tool succeeded in this reply. "
+                "Historical previous_visuals fields are data, not newly created charts. "
+                "Reuse their data when useful, but call chart_tool for each new visual."
             )
         model_name = getattr(self.model, "model", None)
         if isinstance(model_name, str):
@@ -119,6 +123,16 @@ class LangGraphAgent:
         except ValidationError as exc:
             raise SecurityError("invalid_model_response") from exc
         if isinstance(validated, FinalAnswer):
+            feedback = self.final_check(validated.final) if self.final_check is not None else None
+            if feedback is not None:
+                if not isinstance(feedback, str) or not 1 <= len(feedback) <= 2000:
+                    raise SecurityError("invalid_request")
+                # This is trusted host formatting feedback, never a tool grant or replay.
+                messages = state["messages"] + [
+                    {"role": "assistant", "content": json.dumps(validated.model_dump())},
+                    {"role": "system", "content": feedback},
+                ]
+                return State(messages=messages, steps=state["steps"] + 1, done=False, answer="")
             return {**state, "done": True, "answer": validated.final}
         decision = validated.model_dump()
         try:

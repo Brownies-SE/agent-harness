@@ -12,6 +12,18 @@ def chart_tool():
     # Expand only our fixed host-owned definitions into the bounded schema subset.
     definitions = schema.pop("$defs", {})
     schema["properties"]["series"]["items"] = deepcopy(definitions["ChartSeries"])
+    schema["examples"] = [
+        {
+            "kind": "line",
+            "labels": ["Jan", "Feb"],
+            "series": [{"name": "Sales", "values": [10, 15]}],
+        },
+        {
+            "kind": "scatter",
+            "labels": ["1", "2", "3"],
+            "series": [{"name": "Score", "values": [50, 65, 80]}],
+        },
+    ]
     schema["description"] = (
         "Create an inline interactive chart or Mermaid diagram from supplied data. "
         "kind: line/bar/scatter/pie with labels and named series values; or mermaid "

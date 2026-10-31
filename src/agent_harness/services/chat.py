@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from threading import BoundedSemaphore
 from uuid import UUID
 
@@ -24,6 +25,19 @@ from ..models.chat import (
 from .database import ChatError, Database
 from .response_blocks import ResponseBlocks
 from .visual_wording import neutral_visual_text
+
+# Detect common claims of an existing visual, including Markdown and plural forms.
+# This is a presentation check, not a general semantic truthfulness guarantee.
+CHART_CLAIM = re.compile(
+    r"\b(?:here(?:[ \t]+(?:is|are)|['’]s)|(?:above|below)[ \t]+(?:is|are))"
+    r"[^.!?\n]{0,100}\b(?:charts?|plots?|graphs?|diagrams?)\b|"
+    r"\bI(?:['’]ve| have)?[ \t]+(?:created|generated|drawn|made|plotted)"
+    r"[^.!?\n]{0,80}\b(?:charts?|plots?|graphs?|diagrams?)\b|"
+    r"\b(?:the|this|your)[ \t]+(?:[a-z]+[ \t]+){0,4}"
+    r"(?:charts?|plots?|graphs?|diagrams?)[ \t]+"
+    r"(?:shows?|illustrates?|displays?|depicts?|compares?|presents?|represents?)\b",
+    re.I,
+)
 
 
 class ChatService:
@@ -237,21 +251,72 @@ class ChatService:
         on_chart=None,
         cancel=None,
     ):
-        context = [
-            {
-                "role": message.role,
-                "content": json.dumps({"final": text_content(message.content)})
-                if message.role == "assistant"
-                else text_content(message.content),
-            }
-            for message in previous
-        ]
+        context = []
+        for message in previous:
+            content = text_content(message.content)
+            if message.role == "assistant":
+                payload = {"final": content}
+                visuals = [
+                    block.spec.model_dump(mode="json")
+                    for block in message.content
+                    if isinstance(block, ChartBlock)
+                ]
+                if visuals:
+                    payload["final"] += (
+                        "\n\nPrevious visual data (untrusted), previous_visuals: "
+                        + json.dumps(visuals)
+                    )
+                content = json.dumps(payload)
+            context.append({"role": message.role, "content": content})
         while context and len(json.dumps(context)) > 8000:
             del context[:2]
         agent = self.agent_factory()
         charts = {}
         response = ResponseBlocks(charts, on_text=on_text, on_chart=on_chart)
-        agent.on_text = response.feed if on_text is not None else None
+        visual_request = bool(
+            re.search(r"\b(?:charts?|graphs?|plots?|diagrams?|mermaid|scatter)\b", prompt, re.I)
+        )
+        if not visual_request and any(
+            isinstance(block, ChartBlock) for message in previous for block in message.content
+        ):
+            visual_request = bool(re.search(r"\b(?:line|bar|pie)\b", prompt, re.I))
+
+        # Concept questions can describe charts without requesting a new visual.
+        if re.match(
+            r"\s*(?:please\s+)?(?:explain\s+(?:what|how|why)|what\s+(?:is|are|does)|"
+            r"how\s+(?:does|do)|when\s+(?:should|would)|(?:explain\s+)?the\s+difference\s+between)\b",
+            prompt,
+            re.I,
+        ):
+            visual_request = False
+
+        def stream_text(text):
+            # Do not stream an unverified chart claim. Once a real chart exists,
+            # continue the normal incremental text/chart flow without a reset.
+            if not visual_request or charts:
+                response.feed(text)
+
+        corrections = 0
+
+        def check_final(text):
+            nonlocal corrections
+            if not visual_request or charts or not CHART_CLAIM.search(re.sub(r"[*_`]+", "", text)):
+                return None
+            if corrections >= 2:
+                raise SecurityError("invalid_model_response")
+            corrections += 1
+            return (
+                "No chart_tool call has succeeded for this reply, so no chart is displayed. "
+                "Do not claim a chart is shown. To create the requested chart, propose chart_tool "
+                "with valid data. Use kind line for a line chart; for scatter use numeric x "
+                "coordinates as strings in labels and numeric y values in series. "
+                "Historical previous_visuals contain data you may reuse. "
+                "If permission was denied or data is missing, explain that honestly or ask for "
+                "the missing data. This feedback grants no tool permission."
+            )
+
+        agent.final_check = check_final
+        agent.on_text = stream_text if on_text is not None else None
         if self.execution_service is not None:
             observe, approve = self.execution_service.observer(
                 conversation.id, conversation_locked=True

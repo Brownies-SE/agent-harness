@@ -21,8 +21,18 @@ class ChartSpec(StrictModel):
     title: str = Field(default="", max_length=120)
     x_label: str = Field(default="", max_length=80)
     y_label: str = Field(default="", max_length=80)
-    labels: list[Label] = Field(default_factory=list, max_length=200)
-    series: list[ChartSeries] = Field(default_factory=list, max_length=6)
+    labels: list[Label] = Field(
+        default_factory=list,
+        max_length=200,
+        description=(
+            "X labels as strings; scatter needs numeric coordinates such as ['1','2','3']."
+        ),
+    )
+    series: list[ChartSeries] = Field(
+        default_factory=list,
+        max_length=6,
+        description=("Named numeric y series; every values array must match labels in length."),
+    )
     mermaid: str = Field(default="", max_length=12000)
 
     @field_validator("mermaid")
