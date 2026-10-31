@@ -3,10 +3,10 @@ import os
 
 import pytest
 
-from agent_harness.executor import Executor, SecurityError, Tool
-from agent_harness.filesystem import filesystem_tools
-from agent_harness.network import check_url
-from agent_harness.policy import Policy
+from agent_harness.core.executor import Executor, SecurityError, Tool
+from agent_harness.core.policy import Policy
+from agent_harness.tools.filesystem import filesystem_tools
+from agent_harness.tools.network import check_url
 
 SCHEMA = {
     "type": "object",

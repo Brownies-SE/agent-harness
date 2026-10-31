@@ -8,13 +8,14 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .agents import LangGraphAgent
-from .errors import SecurityError, safe_reason
-from .executor import Executor
+from agent_harness.core.agents import LangGraphAgent
+from agent_harness.core.errors import SecurityError, safe_reason
+from agent_harness.core.executor import Executor
+from agent_harness.core.policy import Policy
+from agent_harness.core.runtime import RunStopped
+from agent_harness.tools import builtin_tools
+
 from .model import LocalModel
-from .policy import Policy
-from .runtime import RunStopped
-from .tools import builtin_tools
 
 CASES = ("read_lookup", "combine_files", "approved_report", "deny_network", "deny_sensitive")
 
