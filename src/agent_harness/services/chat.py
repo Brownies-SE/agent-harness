@@ -47,7 +47,7 @@ class ChatService:
         query = (
             "SELECT id, title, summary, compacted_through_message_id, memory_processed_at, "
             "created_at, updated_at FROM agent_chat.conversations "
-            "WHERE id=%s AND user_id=%s"
+            "WHERE id=%s AND user_id=%s AND deleted_at IS NULL"
         )
         if lock:
             query += " FOR NO KEY UPDATE NOWAIT"
@@ -75,7 +75,8 @@ class ChatService:
             rows = connection.execute(
                 "SELECT id, title, summary, compacted_through_message_id, memory_processed_at, "
                 "created_at, updated_at FROM agent_chat.conversations "
-                "WHERE user_id=%s ORDER BY updated_at DESC, id DESC LIMIT %s OFFSET %s",
+                "WHERE user_id=%s AND deleted_at IS NULL "
+                "ORDER BY updated_at DESC, id DESC LIMIT %s OFFSET %s",
                 (self.owner, limit, offset),
             ).fetchall()
             return [Conversation.model_validate(row) for row in rows]
@@ -92,7 +93,8 @@ class ChatService:
                 "FROM agent_chat.messages m WHERE m.conversation_id=c.id "
                 "AND strpos(lower(COALESCE(m.content #>> '{0,text}','')),%s)>0 "
                 "ORDER BY CASE WHEN %s='' THEN -m.seq ELSE m.seq END LIMIT 1) hit ON true "
-                "WHERE c.user_id=%s AND (%s='' OR strpos(lower(c.title),%s)>0 "
+                "WHERE c.user_id=%s AND c.deleted_at IS NULL "
+                "AND (%s='' OR strpos(lower(c.title),%s)>0 "
                 "OR hit.id IS NOT NULL) ORDER BY c.updated_at DESC,c.id DESC LIMIT %s OFFSET %s",
                 (query, query, self.owner, query, query, request.limit, request.offset),
             ).fetchall()
@@ -131,7 +133,8 @@ class ChatService:
         with self.database.connect() as connection:
             self._conversation(connection, conversation_id, lock=True)
             connection.execute(
-                "DELETE FROM agent_chat.conversations WHERE id=%s AND user_id=%s",
+                "UPDATE agent_chat.conversations SET deleted_at=clock_timestamp(), "
+                "updated_at=clock_timestamp() WHERE id=%s AND user_id=%s",
                 (conversation_id, self.owner),
             )
 
@@ -204,7 +207,9 @@ class ChatService:
             del context[:2]
         agent = self.agent_factory()
         if self.execution_service is not None:
-            observe, approve = self.execution_service.observer(conversation.id)
+            observe, approve = self.execution_service.observer(
+                conversation.id, conversation_locked=True
+            )
             agent.executor._observe = observe
             agent.executor._approve = approve
         observations = []

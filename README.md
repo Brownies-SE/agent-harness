@@ -108,7 +108,8 @@ It adds the compaction/memory markers, cache-read token column, and `VECTOR(1024
 embeddings. File/memory conversation references enforce owner scope; compaction
 markers must reference a message in the same conversation. Migration 0005 adds the
 single local account and session hashes; migration 0006 adds saved reply variants
-and their ratings without deleting existing conversations.
+and their ratings without deleting existing conversations. Migration 0007 adds the
+nullable conversation deletion timestamp.
 Use `--migrate-only` to apply migrations without starting HTTP; use `--port` to
 change the default port 8000. Start your configured local inference server separately.
 The server requires `local_only: true` and `telemetry: false`. FastAPI tracing,
@@ -196,6 +197,16 @@ back both messages; a concurrent send, rename or delete on that conversation ret
 HTTP 409. Reopening a conversation loads its saved history; inference receives at
 most eight recent exchanges within an 8000-character serialized context budget.
 Older messages stay in the database. Usage counts are provider-reported per turn.
+
+Deleting a conversation soft deletes it: its deletion and update timestamps are set,
+and its messages, saved variants and tool audit remain in PostgreSQL. Deleted chats
+are absent from chat lists/search and reject direct history access, sends, renames,
+ratings, selection, regeneration, extraction and compaction. They cannot receive new
+file/memory associations, tool requests or pending tool approvals. Files and extracted
+memories remain independent owned resources, available through their own APIs; delete
+those separately when desired. This is retention, not secure erasure, and there is no
+restore or purge endpoint. Conversation locks serialize deletion with chat work and
+new tool claims; work already claimed as running may finish after deletion.
 
 All model and direct tool requests pass through `Executor.execute`. Calls requiring
 approval are stored as `awaiting_approval`; approving through the API rechecks the

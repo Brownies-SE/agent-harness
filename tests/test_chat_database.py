@@ -78,6 +78,7 @@ def test_complete_requested_schema_exists_and_migration_is_idempotent(chat_datab
         }
         assert {
             ("conversations", "summary"),
+            ("conversations", "deleted_at"),
             ("conversations", "compacted_through_message_id"),
             ("conversations", "memory_processed_at"),
             ("messages", "cache_read_tokens"),
@@ -95,7 +96,7 @@ def test_complete_requested_schema_exists_and_migration_is_idempotent(chat_datab
             for row in connection.execute(
                 "SELECT version FROM agent_chat.schema_migrations ORDER BY version"
             ).fetchall()
-        ] == [1, 2, 3, 4, 5, 6]
+        ] == [1, 2, 3, 4, 5, 6, 7]
     assert chat.get(conversation.id).title == "preserved"
     assert len(chat.messages(conversation.id)) == 2
 
@@ -272,7 +273,7 @@ def test_conversations_and_messages_survive_service_restart(chat_database):
                 "SELECT count(*) AS n FROM agent_chat.messages WHERE conversation_id=%s",
                 (conversation.id,),
             ).fetchone()["n"]
-            == 0
+            == 2
         )
 
 

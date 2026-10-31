@@ -14,6 +14,7 @@ MIGRATIONS = (
     "0004_connection_audit.sql",
     "0005_local_auth.sql",
     "0006_reply_variants.sql",
+    "0007_conversation_soft_delete.sql",
 )
 
 

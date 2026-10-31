@@ -83,7 +83,19 @@ class ExecutionService:
             ).fetchall()
         return [self._record(row) for row in rows]
 
-    def _insert(self, conversation_id, request, run_id=None):
+    def _active_conversation(self, db, conversation_id, *, lock=True):
+        if conversation_id is None:
+            return
+        query = (
+            "SELECT id FROM agent_chat.conversations WHERE id=%s AND user_id=%s "
+            "AND deleted_at IS NULL"
+        )
+        if lock:
+            query += " FOR NO KEY UPDATE NOWAIT"
+        if not db.execute(query, (conversation_id, self.owner)).fetchone():
+            raise ChatError("conversation_not_found", 404)
+
+    def _insert(self, conversation_id, request, run_id=None, *, conversation_locked=False):
         request = json_copy(request)
         tool = request.get("tool", "<invalid>") if isinstance(request, dict) else "<invalid>"
         arguments = request.get("arguments", {}) if isinstance(request, dict) else {}
@@ -92,14 +104,7 @@ class ExecutionService:
         if not isinstance(arguments, dict):
             arguments = {}
         with self.database.connect() as db:
-            if (
-                conversation_id is not None
-                and not db.execute(
-                    "SELECT id FROM agent_chat.conversations WHERE id=%s AND user_id=%s",
-                    (conversation_id, self.owner),
-                ).fetchone()
-            ):
-                raise ChatError("conversation_not_found", 404)
+            self._active_conversation(db, conversation_id, lock=not conversation_locked)
             row = db.execute(
                 "INSERT INTO agent_chat.tool_calls "
                 "(user_id,conversation_id,run_id,tool_use_id,tool_key,input,status) "
@@ -108,7 +113,15 @@ class ExecutionService:
             ).fetchone()
         return row["id"]
 
-    def _callbacks(self, conversation_id, *, existing=None, explicit=False, run_id=None):
+    def _callbacks(
+        self,
+        conversation_id,
+        *,
+        existing=None,
+        explicit=False,
+        run_id=None,
+        conversation_locked=False,
+    ):
         active = ContextVar("execution_calls", default=())
         delegated = ContextVar("execution_delegated_approvals", default=frozenset())
 
@@ -116,8 +129,14 @@ class ExecutionService:
             if event["phase"] == "started":
                 control = current_run()
                 runtime_id = UUID(control.id) if control else run_id
-                call_id = existing or self._insert(conversation_id, event["request"], runtime_id)
+                call_id = existing or self._insert(
+                    conversation_id,
+                    event["request"],
+                    runtime_id,
+                    conversation_locked=conversation_locked,
+                )
                 with self.database.connect() as db:
+                    self._active_conversation(db, conversation_id, lock=not conversation_locked)
                     if not db.execute(
                         "UPDATE agent_chat.tool_calls SET status='running',connection_id=%s,"
                         "started_at=clock_timestamp() WHERE id=%s AND user_id=%s "
@@ -171,9 +190,14 @@ class ExecutionService:
 
         return observe, approve
 
-    def observer(self, conversation_id, run_id=None):
-        """Callbacks belong to one trusted executor; call stacks are context-local."""
-        return self._callbacks(conversation_id, run_id=run_id)
+    def observer(self, conversation_id, run_id=None, *, conversation_locked=False):
+        """Callbacks belong to one trusted executor; call stacks are context-local.
+
+        Only host chat transactions already holding the row lock set conversation_locked.
+        """
+        return self._callbacks(
+            conversation_id, run_id=run_id, conversation_locked=conversation_locked
+        )
 
     def _execute(self, call_id, *, explicit=False):
         saved = self.get(call_id)
@@ -211,7 +235,9 @@ class ExecutionService:
         return self._execute(call_id)
 
     def approve(self, call_id, body):
+        saved = self.get(call_id)
         with self.database.connect() as db:
+            self._active_conversation(db, saved.conversation_id)
             row = db.execute(
                 "SELECT id,status FROM agent_chat.tool_calls WHERE id=%s AND user_id=%s FOR UPDATE",
                 (call_id, self.owner),

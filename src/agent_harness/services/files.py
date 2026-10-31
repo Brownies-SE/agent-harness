@@ -68,7 +68,7 @@ class FileService:
                 if request.conversation_id is not None:
                     conversation = connection.execute(
                         "SELECT id FROM agent_chat.conversations WHERE id=%s AND user_id=%s "
-                        "FOR NO KEY UPDATE NOWAIT",
+                        "AND deleted_at IS NULL FOR NO KEY UPDATE NOWAIT",
                         (request.conversation_id, self.owner),
                     ).fetchone()
                     if conversation is None:

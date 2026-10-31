@@ -28,7 +28,10 @@ class MemoryService:
         self.summarize = summarize
 
     def _conversation(self, connection, conversation_id, *, lock=False):
-        query = "SELECT * FROM agent_chat.conversations WHERE id=%s AND user_id=%s"
+        query = (
+            "SELECT * FROM agent_chat.conversations WHERE id=%s AND user_id=%s "
+            "AND deleted_at IS NULL"
+        )
         if lock:
             query += " FOR NO KEY UPDATE NOWAIT"
         row = connection.execute(query, (conversation_id, self.owner)).fetchone()
