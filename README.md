@@ -100,12 +100,15 @@ uv run --no-sync agent-harness-server --config harness.local.yaml
 ```
 
 Startup applies versioned migrations to the `agent_chat` schema. You can inspect
-`users`, `conversations`, `messages`, `mcp_servers`, `mcp_connections`, `mcp_tools`,
+`users`, `local_account`, `auth_sessions`, `conversations`, `messages`,
+`message_variants`, `mcp_servers`, `mcp_connections`, `mcp_tools`,
 `tool_permissions`, `tool_calls`, `files`, `memories`, and migration tracking there in
 DBeaver. Migration 0002 upgrades the initial chat schema without deleting messages.
 It adds the compaction/memory markers, cache-read token column, and `VECTOR(1024)`
 embeddings. File/memory conversation references enforce owner scope; compaction
-markers must reference a message in the same conversation.
+markers must reference a message in the same conversation. Migration 0005 adds the
+single local account and session hashes; migration 0006 adds saved reply variants
+and their ratings without deleting existing conversations.
 Use `--migrate-only` to apply migrations without starting HTTP; use `--port` to
 change the default port 8000. Start your configured local inference server separately.
 The server requires `local_only: true` and `telemetry: false`. FastAPI tracing,
@@ -116,16 +119,44 @@ Open [ReDoc](http://127.0.0.1:8000/redoc) for the reference or
 their pinned JS/CSS assets are served locally without authentication; they contain
 no user data. Paste `HARNESS_API_TOKEN` from your private environment file into the
 page to load the schema. Tokens stay in page memory, never URLs or browser storage.
-Every API request requires `Authorization: Bearer <HARNESS_API_TOKEN>`, including
-health and `/openapi.json`. OpenAPI declares HTTP bearer security for every API
-operation, so generated clients can supply the token. The server binds only `127.0.0.1`, rejects other Host
-headers, disables proxy-header trust and access logs, and returns `Cache-Control:
-no-store`. CORS is disabled; connect the future UI through a same-origin proxy or
-add its exact local origin when integrating it. Anyone holding this token acts as
-the single local owner; this is not multi-user authentication.
+The host token remains the machine and documentation credential; keep it server-only
+in private environment configuration. Lucid users sign in with email/password and do
+not enter an API key. On first launch, the user chooses their own email and password
+in Lucid; the agent does not choose or store a plaintext password. Setup establishes
+one local owner account, preserving the existing owner's UUID and conversations.
+There is no public registration, password-reset endpoint or multi-user account system.
+
+Lucid's server forwards the host bearer only for account status, setup and login.
+Successful setup/login returns an opaque session, which Lucid stores in an HttpOnly,
+SameSite Strict cookie with an eight-hour lifetime. Resource requests forward that
+session as a bearer; logout revokes it and clears the cookie. The loopback proxy
+checks write-request Origin against the request origin and rejects cross-origin
+writes. Cookies use local HTTP for this loopback deployment; HTTPS and Secure cookies
+are required before any future remote exposure.
+
+Passwords are Argon2id hashes (64 MiB memory, three iterations, parallelism one).
+Setup accepts 12–1024 characters; login accepts 1–1024. Email addresses are validated
+and normalized. Setup/login attempts share a bounded ten-per-minute, process-local
+limiter; restarting the backend resets it. PostgreSQL stores only SHA-256 session
+token hashes. Sessions expire after eight hours, support revocation, and authenticate
+only the configured local owner. Setup, login and status require the exact host
+bearer even when a valid session is supplied. Other resource endpoints accept either
+the host bearer or an unexpired, unrevoked owner session. Logout requires a session.
+Authentication and validation errors do not echo credentials.
+
+OpenAPI declares HTTP bearer security for every API operation, so generated clients
+can supply the appropriate credential. The server binds only `127.0.0.1`, rejects
+other Host headers, disables proxy-header trust and access logs, and returns
+`Cache-Control: no-store`. CORS is disabled; Lucid connects through its same-origin
+loopback proxy. The host bearer retains the full local owner's authority, including
+account setup; protect it alongside database and host configuration.
 
 | Method | Route | Body / result |
 | --- | --- | --- |
+| GET | `/api/auth/status` | Host bearer only; returns `{"setup_required":true}` or `{"setup_required":false}`. |
+| POST | `/api/auth/setup` | Host bearer only; `{"email":"owner@example.com","password":"your chosen password"}`; initializes the existing owner once. |
+| POST | `/api/auth/login` | Host bearer only; email/password; returns `session_token`, `expires_at`, and `user` (`id`, `email`, `created_at`), as does setup. |
+| POST | `/api/auth/logout` | Session bearer; revokes that session, HTTP 204. |
 | GET | `/api/health` | Database availability and configured model name; does not probe inference. |
 | POST | `/api/conversations` | `{"title":"My chat"}` or `{}`; returns conversation, HTTP 201. |
 | GET | `/api/conversations` | Conversation list; `limit` 1–100 (default 50), `offset` ≥ 0. |
@@ -134,6 +165,24 @@ the single local owner; this is not multi-user authentication.
 | DELETE | `/api/conversations/{id}` | Deletes the conversation and messages; HTTP 204. |
 | GET | `/api/conversations/{id}/messages` | Messages by ascending `seq`; `after_seq` ≥ 0, `limit` 1–100. |
 | POST | `/api/conversations/{id}/messages` | `{"content":"Hello"}`; returns `user`, `assistant`, `run_id`. |
+
+Assistant replies support persistent feedback and alternatives:
+
+| Method | Route | Body / result |
+| --- | --- | --- |
+| PATCH | `/api/conversations/{cid}/messages/{mid}/rating` | `{"variant_id":"UUID","rating":"up"}`; rating is `"up"`, `"down"` or `null`; returns the message. |
+| POST | `/api/conversations/{cid}/messages/{mid}/regenerate` | No body; returns the message with its saved alternatives and new selection. |
+| PATCH | `/api/conversations/{cid}/messages/{mid}/selection` | `{"variant_id":"UUID"}`; selects the saved answer used in canonical history; returns the message. |
+
+Ratings belong to individual variants of owned assistant replies and survive reloads.
+Regeneration runs the existing local agent through `Executor.execute`, saves and
+selects an alternative, and preserves the original turns, variants and tool audit.
+It uses the original user prompt and earlier turns, excluding later turns, recalled
+summaries and memories. It does not replay saved tool executions; a fresh run can
+propose new tool calls under the current policy and approval checks. Selecting an
+alternative changes canonical history and clears the stale compaction summary;
+subsequent normal sends use the selected answer. Later saved turns remain in place;
+selection does not create a branching conversation tree.
 
 Chat message content is a JSONB array of text blocks,
 `[{"type":"text","text":"Hello"}]`. Send only the new message, not client-supplied

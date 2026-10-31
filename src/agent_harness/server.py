@@ -16,6 +16,7 @@ from .api import create_app, validate_token
 from .config import load_config
 from .model import LocalModel
 from .models.settings import EmbeddingConfig
+from .services.auth import AuthService
 from .services.chat import ChatService
 from .services.database import ChatError, Database
 from .services.embeddings import LocalEmbeddings
@@ -35,6 +36,7 @@ class Services:
     mcp: MCPService
     execution: ExecutionService
     status: StatusService
+    auth: AuthService | None = None
 
 
 def build_service(config, database, *, encryption_key=None, files_root=None):
@@ -43,7 +45,7 @@ def build_service(config, database, *, encryption_key=None, files_root=None):
     # Validate the inference destination before creating storage or accepting requests.
     LocalModel(config.policy, endpoint=config.endpoint, model=config.model)
     database.migrate()
-    owner = database.owner("local@localhost")
+    owner = database.local_owner()
     embedding_config = config.embeddings or EmbeddingConfig(endpoint=config.endpoint)
     embedder = LocalEmbeddings(config.policy, embedding_config.endpoint, embedding_config.model)
     mcp = MCPService(
@@ -87,7 +89,15 @@ def build_service(config, database, *, encryption_key=None, files_root=None):
         tool_roots=config.policy.roots,
     )
     chat = ChatService(database, owner, agent, memory_service=memory, execution_service=execution)
-    return Services(chat, memory, files, mcp, execution, StatusService(config, embedding_config))
+    return Services(
+        chat,
+        memory,
+        files,
+        mcp,
+        execution,
+        StatusService(config, embedding_config),
+        AuthService(database, owner),
+    )
 
 
 def main():
@@ -123,6 +133,7 @@ def main():
             mcp_service=services.mcp,
             execution_service=services.execution,
             status_service=services.status,
+            auth_service=services.auth,
         )
     except (ValueError, ChatError, SecurityError):
         # Never print configuration values, connection strings or underlying errors.

@@ -12,6 +12,8 @@ MIGRATIONS = (
     "0002_resources.sql",
     "0003_execution.sql",
     "0004_connection_audit.sql",
+    "0005_local_auth.sql",
+    "0006_reply_variants.sql",
 )
 
 
@@ -88,6 +90,11 @@ class Database:
                 "ON CONFLICT (email) DO UPDATE SET email=EXCLUDED.email RETURNING id",
                 (email,),
             ).fetchone()["id"]
+
+    def local_owner(self):
+        with self.connect() as connection:
+            account = connection.execute("SELECT user_id FROM agent_chat.local_account").fetchone()
+        return account["user_id"] if account else self.owner("local@localhost")
 
     def health(self):
         with self.connect() as connection:

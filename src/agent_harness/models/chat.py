@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import Field, field_validator
 
-from .base import StrictModel
+from .base import StrictModel, WireUUID
 
 
 class ConversationCreate(StrictModel):
@@ -48,6 +48,25 @@ class TextBlock(StrictModel):
     text: str
 
 
+class ReplyVariant(StrictModel):
+    id: UUID
+    ordinal: int = Field(ge=0)
+    content: list[TextBlock] = Field(min_length=1, max_length=1)
+    rating: Literal["up", "down"] | None = None
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
+    created_at: datetime
+
+
+class VariantSelection(StrictModel):
+    variant_id: WireUUID
+
+
+class ReplyRating(VariantSelection):
+    rating: Literal["up", "down"] | None
+
+
 class Message(StrictModel):
     id: UUID
     conversation_id: UUID
@@ -58,6 +77,8 @@ class Message(StrictModel):
     output_tokens: int = Field(default=0, ge=0)
     cache_read_tokens: int = Field(default=0, ge=0)
     created_at: datetime
+    variants: list[ReplyVariant] = Field(default_factory=list)
+    selected_variant: int = Field(default=0, ge=0)
 
 
 class Exchange(StrictModel):

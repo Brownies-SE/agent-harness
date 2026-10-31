@@ -4,18 +4,21 @@ import json
 import re
 import secrets
 
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from agent_harness.model import strict_json
 from agent_harness.routes.documentation import PUBLIC_DOCUMENTATION_PATHS
+from agent_harness.services.database import ChatError
 
 MAX_BODY_BYTES = 64 * 1024
 MAX_UPLOAD_BODY_BYTES = 8 * 1024 * 1024
 
 
 class LocalHTTPBoundary:
-    def __init__(self, app, *, token):
+    def __init__(self, app, *, token, auth_service=None):
         self.app = app
+        self.auth_service = auth_service
         self.authorization = ("Bearer " + token).encode("ascii")
 
     async def __call__(self, scope, receive, send):
@@ -44,9 +47,17 @@ class LocalHTTPBoundary:
             return
         auth = [v for k, v in headers if k == b"authorization"]
         public_docs = scope["method"] == "GET" and scope["path"] in PUBLIC_DOCUMENTATION_PATHS
-        if not public_docs and (
-            len(auth) != 1 or not secrets.compare_digest(auth[0], self.authorization)
-        ):
+        authenticated = len(auth) == 1 and secrets.compare_digest(auth[0], self.authorization)
+        if not authenticated and not public_docs and len(auth) == 1 and self.auth_service:
+            try:
+                bearer = auth[0].decode("ascii")
+                if bearer.startswith("Bearer "):
+                    authenticated = await run_in_threadpool(
+                        self.auth_service.valid_session, bearer[7:]
+                    )
+            except (UnicodeError, ChatError):
+                authenticated = False
+        if not public_docs and not authenticated:
             await reject(401, "authentication_required")
             return
 

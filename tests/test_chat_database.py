@@ -65,6 +65,9 @@ def test_complete_requested_schema_exists_and_migration_is_idempotent(chat_datab
             "tool_calls",
             "files",
             "memories",
+            "local_account",
+            "auth_sessions",
+            "message_variants",
         }
         columns = {
             (row["table_name"], row["column_name"])
@@ -92,7 +95,7 @@ def test_complete_requested_schema_exists_and_migration_is_idempotent(chat_datab
             for row in connection.execute(
                 "SELECT version FROM agent_chat.schema_migrations ORDER BY version"
             ).fetchall()
-        ] == [1, 2, 3, 4]
+        ] == [1, 2, 3, 4, 5, 6]
     assert chat.get(conversation.id).title == "preserved"
     assert len(chat.messages(conversation.id)) == 2
 

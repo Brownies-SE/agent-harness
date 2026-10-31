@@ -118,7 +118,7 @@ class ChatService:
                 "ORDER BY seq LIMIT %s",
                 (conversation_id, after_seq, limit),
             ).fetchall()
-            return [Message.model_validate(row) for row in rows]
+            return [self._message(connection, row) for row in rows]
 
     def send(self, conversation_id: UUID, request: SendMessage) -> Exchange:
         with self.database.connect() as connection:
@@ -130,37 +130,7 @@ class ChatService:
                 (conversation_id, conversation.compacted_through_message_id, conversation_id),
             ).fetchall()
             previous = [Message.model_validate(row) for row in reversed(rows)]
-            context = [
-                {
-                    "role": message.role,
-                    "content": json.dumps({"final": message.content[0].text})
-                    if message.role == "assistant"
-                    else message.content[0].text,
-                }
-                for message in previous
-            ]
-            while context and len(json.dumps(context)) > 8000:
-                del context[:2]
-            agent = self.agent_factory()
-            if self.execution_service is not None:
-                observe, approve = self.execution_service.observer(conversation_id)
-                agent.executor._observe = observe
-                agent.executor._approve = approve
-            observations = []
-            if conversation.summary:
-                observations.append(
-                    "Conversation summary (untrusted): " + conversation.summary[:7900]
-                )
-            if self.memory_service is not None:
-                from ..models.memory import MemorySearch
-
-                hits = self.memory_service.search(
-                    MemorySearch(query=request.content[:400], limit=3, min_score=0.3)
-                )
-                observations.extend(
-                    "Recalled memory (untrusted): " + hit.memory.content[:2000] for hit in hits
-                )
-            answer = agent.run(request.content, context=context, observations=observations)
+            agent, answer = self._answer(conversation, request.content, previous)
             seq = connection.execute(
                 "SELECT COALESCE(MAX(seq),0)+1 AS seq FROM agent_chat.messages "
                 "WHERE conversation_id=%s",
@@ -187,6 +157,38 @@ class ChatService:
             self.execution_service.link_run(exchange.run_id, exchange.assistant.id)
         return exchange
 
+    def _answer(self, conversation, prompt, previous, *, include_recalled_context=True):
+        context = [
+            {
+                "role": message.role,
+                "content": json.dumps({"final": message.content[0].text})
+                if message.role == "assistant"
+                else message.content[0].text,
+            }
+            for message in previous
+        ]
+        while context and len(json.dumps(context)) > 8000:
+            del context[:2]
+        agent = self.agent_factory()
+        if self.execution_service is not None:
+            observe, approve = self.execution_service.observer(conversation.id)
+            agent.executor._observe = observe
+            agent.executor._approve = approve
+        observations = []
+        if include_recalled_context and conversation.summary:
+            observations.append("Conversation summary (untrusted): " + conversation.summary[:7900])
+        if include_recalled_context and self.memory_service is not None:
+            from ..models.memory import MemorySearch
+
+            hits = self.memory_service.search(
+                MemorySearch(query=prompt[:400], limit=3, min_score=0.3)
+            )
+            observations.extend(
+                "Recalled memory (untrusted): " + hit.memory.content[:2000] for hit in hits
+            )
+        answer = agent.run(prompt, context=context, observations=observations)
+        return agent, answer
+
     @staticmethod
     def _insert(
         connection,
@@ -212,4 +214,131 @@ class ChatService:
                 cache_read_tokens,
             ),
         ).fetchone()
-        return Message.model_validate(row)
+        if role == "assistant":
+            connection.execute(
+                "INSERT INTO agent_chat.message_variants "
+                "(id,message_id,ordinal,content,input_tokens,output_tokens,cache_read_tokens) "
+                "VALUES (%s,%s,0,%s,%s,%s,%s)",
+                (
+                    row["id"],
+                    row["id"],
+                    Jsonb(row["content"]),
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                ),
+            )
+        return ChatService._message(connection, row)
+
+    @staticmethod
+    def _message(connection, row):
+        values = dict(row)
+        if row["role"] == "assistant":
+            values["variants"] = connection.execute(
+                "SELECT "
+                "id,ordinal,content,rating,input_tokens,output_tokens,cache_read_tokens,created_at "
+                "FROM agent_chat.message_variants WHERE message_id=%s ORDER BY ordinal",
+                (row["id"],),
+            ).fetchall()
+        return Message.model_validate(values)
+
+    @staticmethod
+    def _reply(connection, conversation_id, message_id):
+        row = connection.execute(
+            "SELECT * FROM agent_chat.messages WHERE id=%s AND conversation_id=%s "
+            "AND role='assistant'",
+            (message_id, conversation_id),
+        ).fetchone()
+        if row is None:
+            raise ChatError("reply_not_found", 404)
+        return row
+
+    def rate(self, conversation_id, message_id, variant_id, rating):
+        if rating not in ("up", "down", None):
+            raise ChatError("invalid_rating", 422)
+        with self.database.connect() as connection:
+            self._conversation(connection, conversation_id, lock=True)
+            row = self._reply(connection, conversation_id, message_id)
+            changed = connection.execute(
+                "UPDATE agent_chat.message_variants SET rating=%s "
+                "WHERE id=%s AND message_id=%s RETURNING id",
+                (rating, variant_id, message_id),
+            ).fetchone()
+            if changed is None:
+                raise ChatError("variant_not_found", 404)
+            return self._message(connection, row)
+
+    def _select(self, connection, conversation_id, message_id, variant_id):
+        variant = connection.execute(
+            "SELECT * FROM agent_chat.message_variants WHERE id=%s AND message_id=%s",
+            (variant_id, message_id),
+        ).fetchone()
+        if variant is None:
+            raise ChatError("variant_not_found", 404)
+        row = connection.execute(
+            "UPDATE agent_chat.messages SET "
+            "content=%s,selected_variant=%s,input_tokens=%s,"
+            "output_tokens=%s,cache_read_tokens=%s "
+            "WHERE id=%s AND conversation_id=%s RETURNING *",
+            (
+                Jsonb(variant["content"]),
+                variant["ordinal"],
+                variant["input_tokens"],
+                variant["output_tokens"],
+                variant["cache_read_tokens"],
+                message_id,
+                conversation_id,
+            ),
+        ).fetchone()
+        connection.execute(
+            "UPDATE agent_chat.conversations SET "
+            "summary=NULL,compacted_through_message_id=NULL,updated_at=clock_timestamp() "
+            "WHERE id=%s AND user_id=%s",
+            (conversation_id, self.owner),
+        )
+        return self._message(connection, row)
+
+    def select_variant(self, conversation_id, message_id, variant_id):
+        with self.database.connect() as connection:
+            self._conversation(connection, conversation_id, lock=True)
+            self._reply(connection, conversation_id, message_id)
+            return self._select(connection, conversation_id, message_id, variant_id)
+
+    def regenerate(self, conversation_id, message_id):
+        with self.database.connect() as connection:
+            conversation = self._conversation(connection, conversation_id, lock=True)
+            reply = self._reply(connection, conversation_id, message_id)
+            user = connection.execute(
+                "SELECT * FROM agent_chat.messages WHERE conversation_id=%s "
+                "AND seq=%s AND role='user'",
+                (conversation_id, reply["seq"] - 1),
+            ).fetchone()
+            if user is None:
+                raise ChatError("source_turn_not_found", 404)
+            rows = connection.execute(
+                "SELECT * FROM agent_chat.messages WHERE conversation_id=%s AND seq<%s "
+                "ORDER BY seq DESC LIMIT 16",
+                (conversation_id, user["seq"]),
+            ).fetchall()
+            previous = [Message.model_validate(row) for row in reversed(rows)]
+            agent, answer = self._answer(
+                conversation, user["content"][0]["text"], previous, include_recalled_context=False
+            )
+            variant = connection.execute(
+                "INSERT INTO agent_chat.message_variants "
+                "(message_id,ordinal,content,input_tokens,output_tokens,cache_read_tokens) "
+                "SELECT %s,COALESCE(MAX(ordinal),-1)+1,%s,%s,%s,%s "
+                "FROM agent_chat.message_variants WHERE message_id=%s RETURNING id",
+                (
+                    message_id,
+                    Jsonb([{"type": "text", "text": answer}]),
+                    agent.last_run.input_tokens,
+                    agent.last_run.output_tokens,
+                    agent.last_run.cache_read_tokens,
+                    message_id,
+                ),
+            ).fetchone()
+            result = self._select(connection, conversation_id, message_id, variant["id"])
+        if self.execution_service is not None:
+            self.execution_service.link_run(agent.last_run.id, message_id)
+        return result

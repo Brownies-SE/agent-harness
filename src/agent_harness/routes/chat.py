@@ -12,7 +12,9 @@ from ..models.chat import (
     Exchange,
     Health,
     Message,
+    ReplyRating,
     SendMessage,
+    VariantSelection,
 )
 from ..services.chat import ChatService
 
@@ -75,3 +77,24 @@ def list_messages(
 @router.post("/conversations/{conversation_id}/messages", response_model=Exchange)
 def send_message(conversation_id: UUID, body: SendMessage, service: Service):
     return service.send(conversation_id, body)
+
+
+@router.patch(
+    "/conversations/{conversation_id}/messages/{message_id}/rating", response_model=Message
+)
+def rate_reply(conversation_id: UUID, message_id: UUID, body: ReplyRating, service: Service):
+    return service.rate(conversation_id, message_id, body.variant_id, body.rating)
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/regenerate", response_model=Message
+)
+def regenerate_reply(conversation_id: UUID, message_id: UUID, service: Service):
+    return service.regenerate(conversation_id, message_id)
+
+
+@router.patch(
+    "/conversations/{conversation_id}/messages/{message_id}/selection", response_model=Message
+)
+def select_reply(conversation_id: UUID, message_id: UUID, body: VariantSelection, service: Service):
+    return service.select_variant(conversation_id, message_id, body.variant_id)
