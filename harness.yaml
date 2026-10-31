@@ -19,6 +19,7 @@ permissions:
   filesystem.read: allow
   filesystem.write: ask
   network: deny
+  weather.read: deny  # Opt in to fixed Open-Meteo endpoints only.
   subprocess: deny
   process.read: deny
   process.write: deny

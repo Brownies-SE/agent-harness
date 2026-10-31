@@ -231,6 +231,61 @@ those separately when desired. This is retention, not secure erasure, and there 
 restore or purge endpoint. Conversation locks serialize deletion with chat work and
 new tool claims; work already claimed as running may finish after deletion.
 
+### Weather and chart tools
+
+`GET /api/tools` advertises strict input schemas for `weather_tool` and `chart_tool`.
+They are usable through normal/streaming chat and the existing tool-call API; no tool
+request bypasses Executor. Local model inference, embeddings and chart rendering stay
+local. Weather is a separate, explicitly enabled external service.
+
+`weather_tool` uses Open-Meteo's public noncommercial API without an account or key.
+Its arguments are a city/location string, optional two-letter country code, forecast
+days (1–7, default 3), and `imperial` or `metric` units. It returns the provider's first
+geocoding match with name/country/coordinates/timezone, current conditions, dated daily
+forecasts, units, source and retrieval time. Include a country code for ambiguous city
+names and check the resolved location. See [Open-Meteo's terms](https://open-meteo.com/en/terms)
+and [limits](https://open-meteo.com/en/pricing); the free service is noncommercial.
+Host-generated attribution is retained in successful weather replies even if the model
+omits it. Location search text and the server's IP reach Open-Meteo; full chat history,
+session credentials and tool registry are not sent to that provider by the handler.
+
+The default `harness.yaml` denies `weather.read`. To enable weather in trusted host
+configuration, grant `weather.read: allow` under `permissions`; `ask` uses the existing
+approval flow. This permission is a narrowly scoped exception to generic local-only
+networking: the handler can call only HTTPS/443 at fixed paths on
+`geocoding-api.open-meteo.com` and `api.open-meteo.com`. It checks all resolved addresses
+are public and connects to a pinned address without redirects/proxies. Responses are
+limited to 64 KiB per call and ten seconds. `network: deny` and `local_only: true` stay
+in effect for generic network tools/inference; enabling weather does not grant generic
+HTTP access. User tool preferences can restrict this host grant, never expand it.
+
+`chart_tool` accepts a closed `ChartSpec`: `kind` (`line`, `bar`, `scatter`, `pie`,
+`mermaid`), optional title/axis labels, category labels, named numeric series, or Mermaid
+source. Charts accept at most 200 points per series, six series, and finite numbers
+bounded to ±1e12. Pie charts require one nonnegative series with a positive total;
+scatter x labels must be numeric. Mermaid accepts at most 12,000 characters/200 lines
+in supported flowchart, sequence, class, state, ER, Gantt, mindmap, timeline or pie
+syntax. It rejects node metadata, configuration directives, HTML, links, image/icon
+sources, callbacks, source CSS and external resource references. This is a data
+validation tool with no filesystem/network/subprocess capability; per-tool deny/ask
+policies still apply.
+
+Only successful authorized chart-tool results are attached by host code to the reply;
+model prose cannot manufacture an artifact block. Saved assistant JSONB content starts
+with one text block and may contain up to four `{type:"chart",spec:...}` blocks. They
+survive refresh, regeneration, ratings and version selection without a migration.
+Existing text-only messages remain compatible. Streamed charts appear in the committed
+completion event, not as partial diagrams. Conversation search and recalled text use
+the first text block. Direct approved tool-call responses return chart data; attachment
+to an assistant reply occurs when the chat agent executes the chart tool during its run.
+
+Lucid renders numerical charts with local SVG, focus/hover details and series toggles.
+Mermaid is bundled locally, runs with strict host-controlled configuration, and its SVG
+is sanitized before insertion with scripts, images, links, CSS and external references
+removed. Diagrams support local zoom. These application checks are not an OS sandbox
+or a general guarantee of silence from third-party libraries. Visual review is left to
+the user.
+
 All model and direct tool requests pass through `Executor.execute`. Calls requiring
 approval are stored as `awaiting_approval`; approving through the API rechecks the
 current host policy and resources, then executes the exact saved request once.

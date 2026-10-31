@@ -8,6 +8,7 @@ CAPABILITIES = frozenset(
         "filesystem.read",
         "filesystem.write",
         "network",
+        "weather.read",
         "subprocess",
         "process.read",
         "process.write",

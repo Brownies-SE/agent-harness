@@ -6,7 +6,9 @@ from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
+from ..core.errors import SecurityError
 from ..core.runtime import RunStopped
+from ..models.charts import ChartBlock, ChartSpec
 from ..models.chat import (
     Conversation,
     ConversationCreate,
@@ -193,6 +195,7 @@ class ChatService:
                 agent.last_run.input_tokens,
                 agent.last_run.output_tokens,
                 agent.last_run.cache_read_tokens,
+                charts=agent.charts,
             )
             connection.execute(
                 "UPDATE agent_chat.conversations SET updated_at=clock_timestamp() "
@@ -235,6 +238,34 @@ class ChatService:
             )
             agent.executor._observe = observe
             agent.executor._approve = approve
+        agent.charts = []
+        original_observer = agent.executor._observe
+        current_tool = None
+        weather_used = False
+
+        def capture(event):
+            nonlocal current_tool, weather_used
+            if original_observer is not None:
+                original_observer(event)
+            if event["phase"] == "started":
+                request = event.get("request")
+                current_tool = request.get("tool") if isinstance(request, dict) else None
+            elif (
+                event["phase"] == "finished"
+                and event["status"] == "completed"
+                and current_tool == "chart_tool"
+            ):
+                if len(agent.charts) >= 4:
+                    raise SecurityError("payload_too_large")
+                agent.charts.append(ChartBlock(spec=ChartSpec.model_validate(event["result"])))
+            elif (
+                event["phase"] == "finished"
+                and event["status"] == "completed"
+                and current_tool == "weather_tool"
+            ):
+                weather_used = True
+
+        agent.executor._observe = capture
         observations = []
         if include_recalled_context and conversation.summary:
             observations.append("Conversation summary (untrusted): " + conversation.summary[:7900])
@@ -248,6 +279,11 @@ class ChatService:
                 "Recalled memory (untrusted): " + hit.memory.content[:2000] for hit in hits
             )
         answer = agent.run(prompt, context=context, observations=observations, cancel=cancel)
+        if weather_used:
+            attribution = "\n\nWeather data: [Open-Meteo](https://open-meteo.com/) (CC BY 4.0)."
+            answer += attribution
+            if on_text is not None:
+                on_text(attribution)
         return agent, answer
 
     @staticmethod
@@ -260,7 +296,13 @@ class ChatService:
         input_tokens=0,
         output_tokens=0,
         cache_read_tokens=0,
+        *,
+        charts=(),
     ):
+        blocks = [
+            {"type": "text", "text": text},
+            *(chart.model_dump(mode="json") for chart in charts),
+        ]
         row = connection.execute(
             "INSERT INTO agent_chat.messages "
             "(conversation_id, seq, role, content, input_tokens, output_tokens,cache_read_tokens) "
@@ -269,7 +311,7 @@ class ChatService:
                 conversation_id,
                 seq,
                 role,
-                Jsonb([{"type": "text", "text": text}]),
+                Jsonb(blocks),
                 input_tokens,
                 output_tokens,
                 cache_read_tokens,
@@ -392,7 +434,12 @@ class ChatService:
                 "FROM agent_chat.message_variants WHERE message_id=%s RETURNING id",
                 (
                     message_id,
-                    Jsonb([{"type": "text", "text": answer}]),
+                    Jsonb(
+                        [
+                            {"type": "text", "text": answer},
+                            *(chart.model_dump(mode="json") for chart in agent.charts),
+                        ]
+                    ),
                     agent.last_run.input_tokens,
                     agent.last_run.output_tokens,
                     agent.last_run.cache_read_tokens,

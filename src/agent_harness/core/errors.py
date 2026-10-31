@@ -45,6 +45,8 @@ REASON_CODES = frozenset(
         "response_too_large",
         "network_timeout",
         "resource_denied",
+        "weather_location_not_found",
+        "weather_provider_error",
         "cleanup_failed",
     }
 )

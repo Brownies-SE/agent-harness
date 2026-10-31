@@ -2,9 +2,10 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from .base import StrictModel, WireUUID
+from .charts import ChartBlock
 
 
 class ConversationCreate(StrictModel):
@@ -68,15 +69,28 @@ class TextBlock(StrictModel):
     text: str
 
 
+def validate_blocks(content):
+    if not isinstance(content[0], TextBlock) or any(
+        not isinstance(block, ChartBlock) for block in content[1:]
+    ):
+        raise ValueError("expected text followed by chart blocks")
+    return content
+
+
 class ReplyVariant(StrictModel):
     id: UUID
     ordinal: int = Field(ge=0)
-    content: list[TextBlock] = Field(min_length=1, max_length=1)
+    content: list[TextBlock | ChartBlock] = Field(min_length=1, max_length=5)
     rating: Literal["up", "down"] | None = None
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     cache_read_tokens: int = Field(default=0, ge=0)
     created_at: datetime
+
+    @field_validator("content")
+    @classmethod
+    def valid_blocks(cls, content):
+        return validate_blocks(content)
 
 
 class VariantSelection(StrictModel):
@@ -92,13 +106,20 @@ class Message(StrictModel):
     conversation_id: UUID
     seq: int = Field(ge=1)
     role: Literal["user", "assistant"]
-    content: list[TextBlock] = Field(min_length=1, max_length=1)
+    content: list[TextBlock | ChartBlock] = Field(min_length=1, max_length=5)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     cache_read_tokens: int = Field(default=0, ge=0)
     created_at: datetime
     variants: list[ReplyVariant] = Field(default_factory=list)
     selected_variant: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def valid_blocks(self):
+        validate_blocks(self.content)
+        if self.role == "user" and len(self.content) != 1:
+            raise ValueError("user messages must contain text only")
+        return self
 
 
 class Exchange(StrictModel):
